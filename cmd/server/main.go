@@ -451,7 +451,17 @@ func main() {
 
 	// CORS configuration
 	corsConfig := cors.Config{
-		AllowOrigins:     cfg.CORS.AllowedOrigins,
+		AllowOriginFunc: func(origin string) bool {
+			if len(cfg.CORS.AllowedOrigins) == 0 {
+				return true
+			}
+			for _, allowed := range cfg.CORS.AllowedOrigins {
+				if allowed == "*" || allowed == origin {
+					return true
+				}
+			}
+			return false
+		},
 		AllowMethods:     cfg.CORS.AllowedMethods,
 		AllowHeaders:     cfg.CORS.AllowedHeaders,
 		ExposeHeaders:    []string{"Content-Length"},

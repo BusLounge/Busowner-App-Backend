@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"time"
 
+	"strings"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/smarttransit/sms-auth-backend/internal/database"
@@ -234,7 +236,16 @@ func (h *BusHandler) CreateBus(c *gin.Context) {
 
 	err = h.busRepo.Create(bus)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create bus: " + err.Error()})
+		errStr := err.Error()
+		if strings.Contains(errStr, "buses_license_plate_key") {
+			c.JSON(http.StatusConflict, gin.H{"error": "A bus with this license plate is already registered"})
+			return
+		}
+		if strings.Contains(errStr, "buses_permit_id_key") {
+			c.JSON(http.StatusConflict, gin.H{"error": "A bus is already registered under this permit"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create bus: " + errStr})
 		return
 	}
 
@@ -301,7 +312,16 @@ func (h *BusHandler) UpdateBus(c *gin.Context) {
 	// Update bus
 	err = h.busRepo.Update(busID, &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update bus: " + err.Error()})
+		errStr := err.Error()
+		if strings.Contains(errStr, "buses_license_plate_key") {
+			c.JSON(http.StatusConflict, gin.H{"error": "A bus with this license plate is already registered"})
+			return
+		}
+		if strings.Contains(errStr, "buses_permit_id_key") {
+			c.JSON(http.StatusConflict, gin.H{"error": "A bus is already registered under this permit"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update bus: " + errStr})
 		return
 	}
 
