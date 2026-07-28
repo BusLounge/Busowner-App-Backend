@@ -143,10 +143,20 @@ func getEstimatedDuration(duration *int) *int {
 	return &defaultDuration
 }
 
+// getLocalDateOnly returns the date-only time at 00:00:00 UTC representing the local date in Asia/Colombo
+func getLocalDateOnly(t time.Time) time.Time {
+	loc, err := time.LoadLocation("Asia/Colombo")
+	if err != nil {
+		loc = time.FixedZone("Asia/Colombo", 5*3600+30*60) // UTC+5:30 fallback
+	}
+	local := t.In(loc)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+}
+
 // GenerateTripsForNewSchedule generates trips for a newly created schedule
 // Uses trip_generation_days_ahead from system_settings (default: 7 days)
 func (s *TripGeneratorService) GenerateTripsForNewSchedule(schedule *models.TripSchedule) (int, error) {
-	startDate := time.Now()
+	startDate := getLocalDateOnly(time.Now())
 
 	fmt.Printf("=== GenerateTripsForNewSchedule START ===\n")
 	fmt.Printf("Schedule ID: %s\n", schedule.ID)
@@ -290,7 +300,7 @@ func (s *TripGeneratorService) GenerateFutureTrips() (int, error) {
 // Regenerates only future trips that haven't started yet
 // Uses trip_generation_days_ahead from system_settings (default: 7 days)
 func (s *TripGeneratorService) RegenerateTripsForSchedule(schedule *models.TripSchedule) (int, error) {
-	startDate := time.Now()
+	startDate := getLocalDateOnly(time.Now())
 
 	// Start from valid_from if it's in the future
 	if schedule.ValidFrom.After(startDate) {
@@ -324,7 +334,7 @@ func (s *TripGeneratorService) CleanupOldTrips(daysToKeep int) error {
 // Useful for recovering from downtime or errors
 // Uses trip_generation_days_ahead from system_settings for range
 func (s *TripGeneratorService) FillMissingTrips() (int, error) {
-	startDate := time.Now()
+	startDate := getLocalDateOnly(time.Now())
 
 	// Get days ahead from system settings (default: 7)
 	daysAhead := s.settingsRepo.GetIntValue("trip_generation_days_ahead", 7)

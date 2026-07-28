@@ -358,7 +358,7 @@ func (s *TripSchedule) IsValidForDate(date time.Time) bool {
 // GetNextOccurrences returns the next N dates when this schedule will run
 func (s *TripSchedule) GetNextOccurrences(n int) []time.Time {
 	dates := make([]time.Time, 0, n)
-	currentDate := time.Now()
+	currentDate := getLocalDateOnly(time.Now())
 
 	// Start from valid_from if it's in the future (for backward compatibility)
 	if !s.ValidFrom.IsZero() && s.ValidFrom.After(currentDate) {
@@ -446,4 +446,14 @@ func CalculateDurationMinutes(departureTimeStr string, arrivalTimeStr string, is
 	}
 
 	return duration, nil
+}
+
+// getLocalDateOnly returns the date-only time at 00:00:00 UTC representing the local date in Asia/Colombo
+func getLocalDateOnly(t time.Time) time.Time {
+	loc, err := time.LoadLocation("Asia/Colombo")
+	if err != nil {
+		loc = time.FixedZone("Asia/Colombo", 5*3600+30*60) // UTC+5:30 fallback
+	}
+	local := t.In(loc)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
 }

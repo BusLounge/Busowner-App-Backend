@@ -192,7 +192,7 @@ func (r *TripScheduleRepository) GetByCustomRouteID(customRouteID string) ([]mod
 		SELECT id, bus_owner_id, bus_owner_route_id, schedule_name,
 			   recurrence_type, recurrence_days, recurrence_interval, departure_time,
 			   estimated_duration_minutes, base_fare, is_active, notes,
-			   created_at, updated_at
+			   valid_from, valid_until, created_at, updated_at
 		FROM trip_schedules
 		WHERE bus_owner_route_id = $1
 		ORDER BY departure_time
@@ -213,7 +213,7 @@ func (r *TripScheduleRepository) GetAllActiveTimetables() ([]models.TripSchedule
 		SELECT id, bus_owner_id, bus_owner_route_id, schedule_name,
 			   recurrence_type, recurrence_days, recurrence_interval, departure_time,
 			   estimated_duration_minutes, base_fare, is_active, notes,
-			   created_at, updated_at
+			   valid_from, valid_until, created_at, updated_at
 		FROM trip_schedules
 		WHERE is_active = true
 		  AND bus_owner_route_id IS NOT NULL
@@ -408,12 +408,14 @@ func (r *TripScheduleRepository) scanTimetables(rows *sql.Rows) ([]models.TripSc
 		var recurrenceInterval sql.NullInt64
 		var estimatedDurationMinutes sql.NullInt64
 		var notes sql.NullString
+		var validFrom sql.NullTime
+		var validUntil sql.NullTime
 
 		err := rows.Scan(
 			&schedule.ID, &schedule.BusOwnerID, &customRouteID, &scheduleName,
 			&schedule.RecurrenceType, &schedule.RecurrenceDays, &recurrenceInterval, &schedule.DepartureTime,
 			&estimatedDurationMinutes, &schedule.BaseFare, &schedule.IsActive, &notes,
-			&schedule.CreatedAt, &schedule.UpdatedAt,
+			&validFrom, &validUntil, &schedule.CreatedAt, &schedule.UpdatedAt,
 		)
 
 		if err != nil {
@@ -437,6 +439,12 @@ func (r *TripScheduleRepository) scanTimetables(rows *sql.Rows) ([]models.TripSc
 		}
 		if notes.Valid {
 			schedule.Notes = &notes.String
+		}
+		if validFrom.Valid {
+			schedule.ValidFrom = validFrom.Time
+		}
+		if validUntil.Valid {
+			schedule.ValidUntil = &validUntil.Time
 		}
 
 		timetables = append(timetables, schedule)
