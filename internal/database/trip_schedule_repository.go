@@ -25,9 +25,10 @@ func (r *TripScheduleRepository) CreateTimetable(schedule *models.TripSchedule) 
 		INSERT INTO trip_schedules (
 			id, bus_owner_id, bus_owner_route_id, schedule_name,
 			recurrence_type, recurrence_days, recurrence_interval, departure_time,
-			estimated_duration_minutes, base_fare, is_active, valid_from, valid_until, notes
+			estimated_duration_minutes, base_fare, is_active, valid_from, valid_until, notes,
+			permit_id, bus_id
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 		)
 		RETURNING created_at, updated_at
 	`
@@ -42,6 +43,7 @@ func (r *TripScheduleRepository) CreateTimetable(schedule *models.TripSchedule) 
 		schedule.ID, schedule.BusOwnerID, schedule.BusOwnerRouteID, schedule.ScheduleName,
 		schedule.RecurrenceType, schedule.RecurrenceDays, schedule.RecurrenceInterval, schedule.DepartureTime,
 		schedule.EstimatedDurationMinutes, schedule.BaseFare, schedule.IsActive, schedule.ValidFrom, schedule.ValidUntil, schedule.Notes,
+		schedule.PermitID, schedule.BusID,
 	).Scan(&schedule.CreatedAt, &schedule.UpdatedAt)
 
 	return err
@@ -88,7 +90,7 @@ func (r *TripScheduleRepository) GetByID(scheduleID string) (*models.TripSchedul
 			   departure_time, estimated_duration_minutes,
 			   base_fare, is_active, notes,
 			   valid_from, valid_until, specific_dates,
-			   created_at, updated_at
+			   created_at, updated_at, permit_id, bus_id
 		FROM trip_schedules
 		WHERE id = $1
 	`
@@ -101,6 +103,8 @@ func (r *TripScheduleRepository) GetByID(scheduleID string) (*models.TripSchedul
 	var validFrom sql.NullTime
 	var validUntil sql.NullTime
 	var notes sql.NullString
+	var permitID sql.NullString
+	var busID sql.NullString
 
 	err := r.db.QueryRow(query, scheduleID).Scan(
 		&schedule.ID, &schedule.BusOwnerID, &customRouteID, &scheduleName,
@@ -109,6 +113,7 @@ func (r *TripScheduleRepository) GetByID(scheduleID string) (*models.TripSchedul
 		&schedule.BaseFare, &schedule.IsActive, &notes,
 		&validFrom, &validUntil, &schedule.SpecificDates,
 		&schedule.CreatedAt, &schedule.UpdatedAt,
+		&permitID, &busID,
 	)
 
 	if err != nil {
@@ -138,6 +143,12 @@ func (r *TripScheduleRepository) GetByID(scheduleID string) (*models.TripSchedul
 	}
 	if notes.Valid {
 		schedule.Notes = &notes.String
+	}
+	if permitID.Valid {
+		schedule.PermitID = &permitID.String
+	}
+	if busID.Valid {
+		schedule.BusID = &busID.String
 	}
 
 	return schedule, nil
@@ -192,7 +203,7 @@ func (r *TripScheduleRepository) GetByCustomRouteID(customRouteID string) ([]mod
 		SELECT id, bus_owner_id, bus_owner_route_id, schedule_name,
 			   recurrence_type, recurrence_days, recurrence_interval, departure_time,
 			   estimated_duration_minutes, base_fare, is_active, notes,
-			   valid_from, valid_until, created_at, updated_at
+			   valid_from, valid_until, created_at, updated_at, permit_id, bus_id
 		FROM trip_schedules
 		WHERE bus_owner_route_id = $1
 		ORDER BY departure_time
@@ -213,7 +224,7 @@ func (r *TripScheduleRepository) GetAllActiveTimetables() ([]models.TripSchedule
 		SELECT id, bus_owner_id, bus_owner_route_id, schedule_name,
 			   recurrence_type, recurrence_days, recurrence_interval, departure_time,
 			   estimated_duration_minutes, base_fare, is_active, notes,
-			   valid_from, valid_until, created_at, updated_at
+			   valid_from, valid_until, created_at, updated_at, permit_id, bus_id
 		FROM trip_schedules
 		WHERE is_active = true
 		  AND bus_owner_route_id IS NOT NULL
@@ -410,12 +421,15 @@ func (r *TripScheduleRepository) scanTimetables(rows *sql.Rows) ([]models.TripSc
 		var notes sql.NullString
 		var validFrom sql.NullTime
 		var validUntil sql.NullTime
+		var permitID sql.NullString
+		var busID sql.NullString
 
 		err := rows.Scan(
 			&schedule.ID, &schedule.BusOwnerID, &customRouteID, &scheduleName,
 			&schedule.RecurrenceType, &schedule.RecurrenceDays, &recurrenceInterval, &schedule.DepartureTime,
 			&estimatedDurationMinutes, &schedule.BaseFare, &schedule.IsActive, &notes,
 			&validFrom, &validUntil, &schedule.CreatedAt, &schedule.UpdatedAt,
+			&permitID, &busID,
 		)
 
 		if err != nil {
@@ -445,6 +459,12 @@ func (r *TripScheduleRepository) scanTimetables(rows *sql.Rows) ([]models.TripSc
 		}
 		if validUntil.Valid {
 			schedule.ValidUntil = &validUntil.Time
+		}
+		if permitID.Valid {
+			schedule.PermitID = &permitID.String
+		}
+		if busID.Valid {
+			schedule.BusID = &busID.String
 		}
 
 		timetables = append(timetables, schedule)
