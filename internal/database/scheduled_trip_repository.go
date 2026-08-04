@@ -304,7 +304,7 @@ func (r *ScheduledTripRepository) Update(trip *models.ScheduledTrip) error {
 		UPDATE scheduled_trips
 		SET assigned_driver_id = $2, assigned_conductor_id = $3,
 			status = $4, cancellation_reason = $5, cancelled_at = $6,
-			updated_at = NOW()
+			base_fare = $7, departure_datetime = $8, updated_at = NOW()
 		WHERE id = $1
 		RETURNING updated_at
 	`
@@ -313,6 +313,7 @@ func (r *ScheduledTripRepository) Update(trip *models.ScheduledTrip) error {
 		query,
 		trip.ID, trip.AssignedDriverID, trip.AssignedConductorID,
 		trip.Status, trip.CancellationReason, trip.CancelledAt,
+		trip.BaseFare, trip.DepartureDatetime,
 	).Scan(&trip.UpdatedAt)
 
 	return err

@@ -134,12 +134,14 @@ func (r *CreateSpecialTripRequest) Validate() error {
 
 // UpdateScheduledTripRequest represents the request to update a scheduled trip
 type UpdateScheduledTripRequest struct {
-	BusOwnerRouteID     *string `json:"bus_owner_route_id,omitempty"` // Optional route override
-	BusID               *string `json:"bus_id,omitempty"`
-	AssignedDriverID    *string `json:"assigned_driver_id,omitempty"`
-	AssignedConductorID *string `json:"assigned_conductor_id,omitempty"`
-	Status              *string `json:"status,omitempty"`
-	CancellationReason  *string `json:"cancellation_reason,omitempty"`
+	BusOwnerRouteID     *string  `json:"bus_owner_route_id,omitempty"` // Optional route override
+	BusID               *string  `json:"bus_id,omitempty"`
+	AssignedDriverID    *string  `json:"assigned_driver_id,omitempty"`
+	AssignedConductorID *string  `json:"assigned_conductor_id,omitempty"`
+	Status              *string  `json:"status,omitempty"`
+	CancellationReason  *string  `json:"cancellation_reason,omitempty"`
+	BaseFare            *float64 `json:"base_fare,omitempty"`
+	DepartureDatetime   *string  `json:"departure_datetime,omitempty"`
 }
 
 // Validate validates the create scheduled trip request

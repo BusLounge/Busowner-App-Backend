@@ -338,18 +338,28 @@ func (h *ScheduledTripHandler) UpdateTrip(c *gin.Context) {
 		return
 	}
 
-	// Verify ownership
-	if trip.PermitID == nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Trip has no permit assigned"})
-		return
+	// Verify ownership through trip schedule OR bus owner route OR permit
+	var isOwner bool
+	if trip.TripScheduleID != nil {
+		schedule, err := h.scheduleRepo.GetByID(*trip.TripScheduleID)
+		if err == nil && schedule.BusOwnerID == busOwner.ID {
+			isOwner = true
+		}
 	}
-	permit, err := h.permitRepo.GetByID(*trip.PermitID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify ownership"})
-		return
+	if !isOwner && trip.BusOwnerRouteID != nil {
+		route, err := h.routeRepo.GetByID(*trip.BusOwnerRouteID)
+		if err == nil && route.BusOwnerID == busOwner.ID {
+			isOwner = true
+		}
+	}
+	if !isOwner && trip.PermitID != nil {
+		permit, err := h.permitRepo.GetByID(*trip.PermitID)
+		if err == nil && permit.BusOwnerID == busOwner.ID {
+			isOwner = true
+		}
 	}
 
-	if permit.BusOwnerID != busOwner.ID {
+	if !isOwner {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}
@@ -449,6 +459,23 @@ func (h *ScheduledTripHandler) UpdateTrip(c *gin.Context) {
 	}
 	if req.CancellationReason != nil {
 		trip.CancellationReason = req.CancellationReason
+	}
+	if req.BaseFare != nil {
+		trip.BaseFare = *req.BaseFare
+	}
+	if req.DepartureDatetime != nil {
+		parsedTime, err := time.Parse(time.RFC3339, *req.DepartureDatetime)
+		if err != nil {
+			parsedTime, err = time.Parse("2006-01-02 15:04:05", *req.DepartureDatetime)
+			if err != nil {
+				parsedTime, err = time.Parse("2006-01-02T15:04:05", *req.DepartureDatetime)
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "departure_datetime must be in ISO 8601 format"})
+					return
+				}
+			}
+		}
+		trip.DepartureDatetime = parsedTime
 	}
 
 	if err := h.tripRepo.Update(trip); err != nil {
