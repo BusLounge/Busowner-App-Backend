@@ -464,16 +464,28 @@ func (h *ScheduledTripHandler) UpdateTrip(c *gin.Context) {
 		trip.BaseFare = *req.BaseFare
 	}
 	if req.DepartureDatetime != nil {
-		parsedTime, err := time.Parse(time.RFC3339, *req.DepartureDatetime)
-		if err != nil {
-			parsedTime, err = time.Parse("2006-01-02 15:04:05", *req.DepartureDatetime)
-			if err != nil {
-				parsedTime, err = time.Parse("2006-01-02T15:04:05", *req.DepartureDatetime)
-				if err != nil {
-					c.JSON(http.StatusBadRequest, gin.H{"error": "departure_datetime must be in ISO 8601 format"})
-					return
-				}
+		var parsedTime time.Time
+		var err error
+		layouts := []string{
+			time.RFC3339,
+			time.RFC3339Nano,
+			"2006-01-02T15:04:05.999999999Z07:00",
+			"2006-01-02T15:04:05.999999999",
+			"2006-01-02T15:04:05",
+			"2006-01-02 15:04:05",
+			"2006-01-02",
+		}
+		
+		for _, layout := range layouts {
+			parsedTime, err = time.Parse(layout, *req.DepartureDatetime)
+			if err == nil {
+				break
 			}
+		}
+		
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "departure_datetime must be in ISO 8601 format", "details": err.Error()})
+			return
 		}
 		trip.DepartureDatetime = parsedTime
 	}
