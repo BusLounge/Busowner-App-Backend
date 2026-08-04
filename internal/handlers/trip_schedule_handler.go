@@ -601,6 +601,7 @@ func (h *TripScheduleHandler) CreateTimetable(c *gin.Context) {
 		return
 	}
 
+	var busID *string
 	// Permit validation is optional - permit will be assigned later to specific trips
 	// If provided, validate ownership only (no fare/seat limits enforcement)
 	if req.PermitID != nil && *req.PermitID != "" {
@@ -625,8 +626,11 @@ func (h *TripScheduleHandler) CreateTimetable(c *gin.Context) {
 			return
 		}
 
-		// Note: Permit details (approved_fare, approved_seating_capacity) are shown in UI
-		// but not enforced here. User decides what fare and seats to set for the timetable.
+		// Fetch the bus linked to this permit
+		bus, err := h.busRepo.GetByPermitID(*req.PermitID)
+		if err == nil && bus != nil {
+			busID = &bus.ID
+		}
 	}
 
 	// Parse valid_from date (required)
@@ -654,6 +658,7 @@ func (h *TripScheduleHandler) CreateTimetable(c *gin.Context) {
 		ID:                       uuid.New().String(),
 		BusOwnerID:               busOwner.ID,
 		PermitID:                 req.PermitID,
+		BusID:                    busID,
 		BusOwnerRouteID:          &req.CustomRouteID,
 		ScheduleName:             req.ScheduleName,
 		RecurrenceType:           models.RecurrenceType(req.RecurrenceType),
