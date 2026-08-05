@@ -749,34 +749,34 @@ func (r *ScheduledTripRepository) BulkPublishTrips(tripIDs []string, busOwnerID 
 	log.Printf("BulkPublishTrips: Attempting to publish %d trips for booking (bus owner %s)", len(tripIDs), busOwnerID)
 	log.Printf("BulkPublishTrips: Trip IDs: %v", tripIDs)
 
-	// First, check if all trips have seat_layout_id assigned
+	// First, check if all trips have seat_layout_id, assigned_driver_id, and assigned_conductor_id assigned
 	checkQuery := `
 		SELECT st.id
 		FROM scheduled_trips st
 		JOIN trip_schedules ts ON st.trip_schedule_id = ts.id
 		WHERE st.id = ANY($1::text[])
 		  AND ts.bus_owner_id = $2
-		  AND st.seat_layout_id IS NULL
+		  AND (st.seat_layout_id IS NULL OR st.assigned_driver_id IS NULL OR st.assigned_conductor_id IS NULL)
 	`
 	rows, err := r.db.Query(checkQuery, pq.Array(tripIDs), busOwnerID)
 	if err != nil {
-		log.Printf("BulkPublishTrips: Error checking seat layouts: %v", err)
+		log.Printf("BulkPublishTrips: Error checking trip requirements: %v", err)
 		return 0, fmt.Errorf("failed to check trip requirements: %w", err)
 	}
 	defer rows.Close()
 
-	var tripsWithoutLayout []string
+	var invalidTrips []string
 	for rows.Next() {
 		var tripID string
 		if err := rows.Scan(&tripID); err != nil {
 			return 0, fmt.Errorf("failed to scan trip ID: %w", err)
 		}
-		tripsWithoutLayout = append(tripsWithoutLayout, tripID)
+		invalidTrips = append(invalidTrips, tripID)
 	}
 
-	if len(tripsWithoutLayout) > 0 {
-		log.Printf("BulkPublishTrips: %d trips missing seat_layout_id: %v", len(tripsWithoutLayout), tripsWithoutLayout)
-		return 0, fmt.Errorf("cannot publish %d trip(s) without seat layout assigned", len(tripsWithoutLayout))
+	if len(invalidTrips) > 0 {
+		log.Printf("BulkPublishTrips: %d trips missing seat layout or staff assignments: %v", len(invalidTrips), invalidTrips)
+		return 0, fmt.Errorf("cannot publish %d trip(s) without seat layout, driver, and conductor assigned", len(invalidTrips))
 	}
 
 	// Convert string slice to PostgreSQL text array format

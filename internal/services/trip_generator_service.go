@@ -113,7 +113,7 @@ func (s *TripGeneratorService) GenerateTripsForSchedule(schedule *models.TripSch
 				AssignedDriverID:         schedule.DefaultDriverID,
 				AssignedConductorID:      schedule.DefaultConductorID,
 				SeatLayoutID:             seatLayoutID,                               // Use bus's seat layout if available
-				IsBookable:               schedule.IsBookable && seatLayoutID != nil, // Only bookable if we have a seat layout
+				IsBookable:               schedule.IsBookable && seatLayoutID != nil && schedule.DefaultDriverID != nil && schedule.DefaultConductorID != nil, // Only bookable if we have a seat layout, default driver, and default conductor
 				BaseFare:                 schedule.BaseFare,
 				AssignmentDeadline:       &assignmentDeadline,
 				Status:                   models.ScheduledTripStatusScheduled,

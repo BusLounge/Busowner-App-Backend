@@ -846,6 +846,15 @@ func (h *ScheduledTripHandler) PublishTrip(c *gin.Context) {
 		return
 	}
 
+	// Check if driver and conductor are assigned
+	if trip.AssignedDriverID == nil || *trip.AssignedDriverID == "" || trip.AssignedConductorID == nil || *trip.AssignedConductorID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Staff required",
+			"message": "Please assign a bus driver and a conductor to this trip before publishing for booking",
+		})
+		return
+	}
+
 	// Check if trip_seats exist for this trip
 	existingSeats, err := h.tripSeatRepo.GetByScheduledTripID(tripID)
 	if err != nil {
@@ -1000,8 +1009,8 @@ func (h *ScheduledTripHandler) BulkPublishTrips(c *gin.Context) {
 		errMsg := err.Error()
 		if len(errMsg) > 14 && errMsg[:14] == "cannot publish" {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error":   "Some trips missing seat layout",
-				"message": "All trips must have a seat layout assigned before publishing for booking",
+				"error":   "Requirements not met",
+				"message": "All trips must have a seat layout, driver, and conductor assigned before publishing for booking",
 				"details": errMsg,
 			})
 			return
