@@ -7,6 +7,11 @@
 /main
 /server
 /sms-auth-backend
+/test_server
+
+# Root-level scratch/test Go files (use tools/ or scripts/ directories instead)
+/inspect_*.go
+/test_*.go
 
 # Environment files
 .env
