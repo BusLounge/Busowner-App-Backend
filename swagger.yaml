@@ -12187,6 +12187,55 @@ paths:
           $ref: '#/components/responses/AccountNotVerifiedError'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /api/v1/scheduled-trips/{id}/cancel:
+    post:
+      summary: Cancel a scheduled trip
+      description: 'Cancel a scheduled trip. The trip must not have been published yet.'
+      operationId: cancelScheduledTrip
+      tags:
+      - Scheduled Trips
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - reason
+              properties:
+                reason:
+                  type: string
+                  description: Reason for cancellation
+      responses:
+        '200':
+          description: Trip cancelled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Trip cancelled successfully
+        '400':
+          description: Invalid request or trip cannot be cancelled (e.g. already published or status not scheduled/confirmed)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AccountNotVerifiedError'
+        '404':
+          description: Trip not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /api/v1/scheduled-trips/{id}/publish:
     put:
       summary: Publish a scheduled trip for booking

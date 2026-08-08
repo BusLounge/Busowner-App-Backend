@@ -164,7 +164,7 @@ func (r *CreateScheduledTripRequest) Validate() error {
 
 // CanBeCancelled checks if the trip can be cancelled
 func (s *ScheduledTrip) CanBeCancelled() bool {
-	return s.Status == ScheduledTripStatusScheduled || s.Status == ScheduledTripStatusConfirmed
+	return (s.Status == ScheduledTripStatusScheduled || s.Status == ScheduledTripStatusConfirmed) && !s.EverPublished
 }
 
 // IsPastDeparture checks if the trip departure time has passed
