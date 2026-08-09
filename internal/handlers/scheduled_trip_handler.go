@@ -490,6 +490,54 @@ func (h *ScheduledTripHandler) UpdateTrip(c *gin.Context) {
 		trip.DepartureDatetime = parsedTime
 	}
 
+	// Check for driver conflict
+	if trip.AssignedDriverID != nil && *trip.AssignedDriverID != "" {
+		duration := 60
+		if trip.EstimatedDurationMinutes != nil {
+			duration = *trip.EstimatedDurationMinutes
+		}
+		conflict, err := h.tripRepo.CheckStaffConflictWithRouteInfo(*trip.AssignedDriverID, trip.ID, trip.DepartureDatetime, duration)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check driver conflicts", "details": err.Error()})
+			return
+		}
+		if conflict != nil {
+			routeNum := "Unknown"
+			if conflict.RouteNumber != nil {
+				routeNum = *conflict.RouteNumber
+			}
+			depTime := conflict.DepartureDatetime.Format("15:04")
+			c.JSON(http.StatusConflict, gin.H{
+				"error": fmt.Sprintf("Driver is already assigned to an overlapping trip (Route %s, departing at %s)", routeNum, depTime),
+			})
+			return
+		}
+	}
+
+	// Check for conductor conflict
+	if trip.AssignedConductorID != nil && *trip.AssignedConductorID != "" {
+		duration := 60
+		if trip.EstimatedDurationMinutes != nil {
+			duration = *trip.EstimatedDurationMinutes
+		}
+		conflict, err := h.tripRepo.CheckStaffConflictWithRouteInfo(*trip.AssignedConductorID, trip.ID, trip.DepartureDatetime, duration)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check conductor conflicts", "details": err.Error()})
+			return
+		}
+		if conflict != nil {
+			routeNum := "Unknown"
+			if conflict.RouteNumber != nil {
+				routeNum = *conflict.RouteNumber
+			}
+			depTime := conflict.DepartureDatetime.Format("15:04")
+			c.JSON(http.StatusConflict, gin.H{
+				"error": fmt.Sprintf("Conductor is already assigned to an overlapping trip (Route %s, departing at %s)", routeNum, depTime),
+			})
+			return
+		}
+	}
+
 	if err := h.tripRepo.Update(trip); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update trip", "details": err.Error()})
 		return
@@ -781,6 +829,54 @@ func (h *ScheduledTripHandler) CreateSpecialTrip(c *gin.Context) {
 		BookingAdvanceHours: bookingAdvanceHours,
 		AssignmentDeadline:  &assignmentDeadline,
 		Status:              models.ScheduledTripStatusScheduled,
+	}
+
+	// Check for driver conflict
+	if trip.AssignedDriverID != nil && *trip.AssignedDriverID != "" {
+		duration := 60
+		if trip.EstimatedDurationMinutes != nil {
+			duration = *trip.EstimatedDurationMinutes
+		}
+		conflict, err := h.tripRepo.CheckStaffConflictWithRouteInfo(*trip.AssignedDriverID, "", trip.DepartureDatetime, duration)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check driver conflicts", "details": err.Error()})
+			return
+		}
+		if conflict != nil {
+			routeNum := "Unknown"
+			if conflict.RouteNumber != nil {
+				routeNum = *conflict.RouteNumber
+			}
+			depTime := conflict.DepartureDatetime.Format("15:04")
+			c.JSON(http.StatusConflict, gin.H{
+				"error": fmt.Sprintf("Driver is already assigned to an overlapping trip (Route %s, departing at %s)", routeNum, depTime),
+			})
+			return
+		}
+	}
+
+	// Check for conductor conflict
+	if trip.AssignedConductorID != nil && *trip.AssignedConductorID != "" {
+		duration := 60
+		if trip.EstimatedDurationMinutes != nil {
+			duration = *trip.EstimatedDurationMinutes
+		}
+		conflict, err := h.tripRepo.CheckStaffConflictWithRouteInfo(*trip.AssignedConductorID, "", trip.DepartureDatetime, duration)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check conductor conflicts", "details": err.Error()})
+			return
+		}
+		if conflict != nil {
+			routeNum := "Unknown"
+			if conflict.RouteNumber != nil {
+				routeNum = *conflict.RouteNumber
+			}
+			depTime := conflict.DepartureDatetime.Format("15:04")
+			c.JSON(http.StatusConflict, gin.H{
+				"error": fmt.Sprintf("Conductor is already assigned to an overlapping trip (Route %s, departing at %s)", routeNum, depTime),
+			})
+			return
+		}
 	}
 
 	if err := h.tripRepo.Create(trip); err != nil {
@@ -1247,6 +1343,28 @@ func (h *ScheduledTripHandler) AssignStaffAndPermit(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Driver's license will be expired on trip date"})
 			return
 		}
+
+		// Check for driver conflict
+		duration := 60
+		if trip.EstimatedDurationMinutes != nil {
+			duration = *trip.EstimatedDurationMinutes
+		}
+		conflict, err := h.tripRepo.CheckStaffConflictWithRouteInfo(*req.DriverID, trip.ID, trip.DepartureDatetime, duration)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check driver conflicts", "details": err.Error()})
+			return
+		}
+		if conflict != nil {
+			routeNum := "Unknown"
+			if conflict.RouteNumber != nil {
+				routeNum = *conflict.RouteNumber
+			}
+			depTime := conflict.DepartureDatetime.Format("15:04")
+			c.JSON(http.StatusConflict, gin.H{
+				"error": fmt.Sprintf("Driver is already assigned to an overlapping trip (Route %s, departing at %s)", routeNum, depTime),
+			})
+			return
+		}
 	}
 
 	// Validate conductor if provided
@@ -1277,6 +1395,28 @@ func (h *ScheduledTripHandler) AssignStaffAndPermit(c *gin.Context) {
 		// Verify employment status
 		if employment.EmploymentStatus != "active" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Conductor is not actively employed"})
+			return
+		}
+
+		// Check for conductor conflict
+		duration := 60
+		if trip.EstimatedDurationMinutes != nil {
+			duration = *trip.EstimatedDurationMinutes
+		}
+		conflict, err := h.tripRepo.CheckStaffConflictWithRouteInfo(*req.ConductorID, trip.ID, trip.DepartureDatetime, duration)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check conductor conflicts", "details": err.Error()})
+			return
+		}
+		if conflict != nil {
+			routeNum := "Unknown"
+			if conflict.RouteNumber != nil {
+				routeNum = *conflict.RouteNumber
+			}
+			depTime := conflict.DepartureDatetime.Format("15:04")
+			c.JSON(http.StatusConflict, gin.H{
+				"error": fmt.Sprintf("Conductor is already assigned to an overlapping trip (Route %s, departing at %s)", routeNum, depTime),
+			})
 			return
 		}
 	}
