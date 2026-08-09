@@ -39,6 +39,7 @@ type Bus struct {
 
 	// Seat Layout
 	SeatLayoutID *string `json:"seat_layout_id,omitempty" db:"seat_layout_id"`
+	TotalSeats   *int    `json:"total_seats,omitempty" db:"total_seats"`
 
 	// Amenities
 	HasWifi          bool `json:"has_wifi" db:"has_wifi"`
