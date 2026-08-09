@@ -940,3 +940,46 @@ func (r *ScheduledTripRepository) GetAssignedTripsForStaff(staffID string, start
 	log.Printf("GetAssignedTripsForStaff: Found %d trips for staff %s", len(trips), staffID)
 	return trips, nil
 }
+
+// CheckStaffConflictWithRouteInfo checks if a driver or conductor is already assigned to a concurrent trip and returns route details.
+// An overlap exists if: StartA < EndB AND StartB < EndA.
+func (r *ScheduledTripRepository) CheckStaffConflictWithRouteInfo(staffID string, excludeTripID string, departureTime time.Time, durationMinutes int) (*models.ScheduledTripWithRouteInfo, error) {
+	query := `
+		SELECT 
+			st.id, st.trip_schedule_id, st.permit_id, st.departure_datetime,
+			st.estimated_duration_minutes, st.assigned_driver_id, st.assigned_conductor_id,
+			st.seat_layout_id, st.is_bookable, st.ever_published, st.base_fare, st.status, st.cancellation_reason, st.cancelled_at,
+			st.assignment_deadline, st.created_at, st.updated_at,
+			mr.route_number, mr.origin_city, mr.destination_city,
+			bor.direction
+		FROM scheduled_trips st
+		LEFT JOIN trip_schedules ts ON st.trip_schedule_id = ts.id
+		LEFT JOIN bus_owner_routes bor ON COALESCE(st.bus_owner_route_id, ts.bus_owner_route_id) = bor.id
+		LEFT JOIN master_routes mr ON bor.master_route_id = mr.id
+		WHERE (st.assigned_driver_id = $1 OR st.assigned_conductor_id = $1)
+		  AND st.status NOT IN ('cancelled', 'completed')
+		  AND st.id != $2
+		  AND st.departure_datetime < $3
+		  AND (st.departure_datetime + (COALESCE(st.estimated_duration_minutes, 60) || ' minutes')::interval) > $4
+		LIMIT 1
+	`
+
+	endTime := departureTime.Add(time.Duration(durationMinutes) * time.Minute)
+
+	rows, err := r.db.Query(query, staffID, excludeTripID, endTime, departureTime)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query staff conflicts: %w", err)
+	}
+	defer rows.Close()
+
+	trips, err := r.scanTripsWithRouteInfo(rows)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan staff conflicts: %w", err)
+	}
+
+	if len(trips) == 0 {
+		return nil, nil // No conflict
+	}
+
+	return &trips[0], nil
+}

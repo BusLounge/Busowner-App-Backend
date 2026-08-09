@@ -100,6 +100,27 @@ func (s *TripGeneratorService) GenerateTripsForSchedule(schedule *models.TripSch
 
 			assignmentDeadline := departureDatetime.Add(-time.Duration(assignmentDeadlineHours) * time.Hour)
 
+			// Check for driver conflict
+			assignedDriverID := schedule.DefaultDriverID
+			durationMins := *getEstimatedDuration(schedule.EstimatedDurationMinutes)
+			if assignedDriverID != nil {
+				conflict, err := s.scheduledTripRepo.CheckStaffConflictWithRouteInfo(*assignedDriverID, "", departureDatetime, durationMins)
+				if err == nil && conflict != nil {
+					assignedDriverID = nil // Leave unassigned due to conflict
+					fmt.Printf("⚠️ Generator Conflict: Default driver %s is busy on %s. Leaving unassigned.\n", *schedule.DefaultDriverID, departureDatetime.Format("2006-01-02 15:04"))
+				}
+			}
+
+			// Check for conductor conflict
+			assignedConductorID := schedule.DefaultConductorID
+			if assignedConductorID != nil {
+				conflict, err := s.scheduledTripRepo.CheckStaffConflictWithRouteInfo(*assignedConductorID, "", departureDatetime, durationMins)
+				if err == nil && conflict != nil {
+					assignedConductorID = nil // Leave unassigned due to conflict
+					fmt.Printf("⚠️ Generator Conflict: Default conductor %s is busy on %s. Leaving unassigned.\n", *schedule.DefaultConductorID, departureDatetime.Format("2006-01-02 15:04"))
+				}
+			}
+
 			// Create scheduled trip
 			scheduleID := schedule.ID
 			trip := &models.ScheduledTrip{
@@ -110,10 +131,10 @@ func (s *TripGeneratorService) GenerateTripsForSchedule(schedule *models.TripSch
 				BusID:                    schedule.BusID,
 				DepartureDatetime:        departureDatetime,                                       // Specific departure date and time
 				EstimatedDurationMinutes: getEstimatedDuration(schedule.EstimatedDurationMinutes), // Required field - use default 60 if nil
-				AssignedDriverID:         schedule.DefaultDriverID,
-				AssignedConductorID:      schedule.DefaultConductorID,
+				AssignedDriverID:         assignedDriverID,
+				AssignedConductorID:      assignedConductorID,
 				SeatLayoutID:             seatLayoutID,                               // Use bus's seat layout if available
-				IsBookable:               schedule.IsBookable && seatLayoutID != nil && schedule.DefaultDriverID != nil && schedule.DefaultConductorID != nil, // Only bookable if we have a seat layout, default driver, and default conductor
+				IsBookable:               schedule.IsBookable && seatLayoutID != nil && assignedDriverID != nil && assignedConductorID != nil, // Only bookable if we have a seat layout, driver, and conductor
 				BaseFare:                 schedule.BaseFare,
 				AssignmentDeadline:       &assignmentDeadline,
 				Status:                   models.ScheduledTripStatusScheduled,
@@ -261,6 +282,30 @@ func (s *TripGeneratorService) GenerateFutureTrips() (int, error) {
 				}
 			}
 
+			// Check for driver conflict
+			assignedDriverID := timetable.DefaultDriverID
+			durationMins := 60
+			if timetable.EstimatedDurationMinutes != nil {
+				durationMins = *timetable.EstimatedDurationMinutes
+			}
+			if assignedDriverID != nil {
+				conflict, err := s.scheduledTripRepo.CheckStaffConflictWithRouteInfo(*assignedDriverID, "", departureDatetime, durationMins)
+				if err == nil && conflict != nil {
+					assignedDriverID = nil // Leave unassigned due to conflict
+					fmt.Printf("⚠️ Generator Conflict: Default driver %s is busy on %s. Leaving unassigned.\n", *timetable.DefaultDriverID, departureDatetime.Format("2006-01-02 15:04"))
+				}
+			}
+
+			// Check for conductor conflict
+			assignedConductorID := timetable.DefaultConductorID
+			if assignedConductorID != nil {
+				conflict, err := s.scheduledTripRepo.CheckStaffConflictWithRouteInfo(*assignedConductorID, "", departureDatetime, durationMins)
+				if err == nil && conflict != nil {
+					assignedConductorID = nil // Leave unassigned due to conflict
+					fmt.Printf("⚠️ Generator Conflict: Default conductor %s is busy on %s. Leaving unassigned.\n", *timetable.DefaultConductorID, departureDatetime.Format("2006-01-02 15:04"))
+				}
+			}
+
 			// Create scheduled trip
 			scheduleID := timetable.ID
 			trip := &models.ScheduledTrip{
@@ -271,10 +316,10 @@ func (s *TripGeneratorService) GenerateFutureTrips() (int, error) {
 				BusID:                    timetable.BusID,
 				DepartureDatetime:        departureDatetime,                  // Specific departure date and time
 				EstimatedDurationMinutes: timetable.EstimatedDurationMinutes, // Copy duration from template (arrival calculated on-the-fly)
-				AssignedDriverID:         timetable.DefaultDriverID,
-				AssignedConductorID:      timetable.DefaultConductorID,
+				AssignedDriverID:         assignedDriverID,
+				AssignedConductorID:      assignedConductorID,
 				SeatLayoutID:             seatLayoutID,                                // Use bus's seat layout if available
-				IsBookable:               timetable.IsBookable && seatLayoutID != nil, // Only bookable if we have a seat layout
+				IsBookable:               timetable.IsBookable && seatLayoutID != nil && assignedDriverID != nil && assignedConductorID != nil, // Only bookable if we have a seat layout, driver, and conductor
 				TotalSeats:               totalSeats,
 				// AvailableSeats and BookedSeats removed - managed in separate booking table
 				BaseFare:            timetable.BaseFare,
