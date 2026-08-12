@@ -370,6 +370,14 @@ func (h *ScheduledTripHandler) UpdateTrip(c *gin.Context) {
 		return
 	}
 
+	// Prevent removing staff from a published trip
+	if trip.IsBookable {
+		if (req.AssignedDriverID != nil && *req.AssignedDriverID == "") || (req.AssignedConductorID != nil && *req.AssignedConductorID == "") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot remove staff from a published trip. Please unpublish the trip first."})
+			return
+		}
+	}
+
 	// VALIDATION: If updating bus_owner_route_id, validate it matches master route and direction
 	if req.BusOwnerRouteID != nil {
 		if trip.TripScheduleID == nil {
@@ -1304,6 +1312,14 @@ func (h *ScheduledTripHandler) AssignStaffAndPermit(c *gin.Context) {
 	if req.DriverID == nil && req.ConductorID == nil && req.PermitID == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "At least one of driver_id, conductor_id, or permit_id must be provided"})
 		return
+	}
+
+	// Prevent removing staff from a published trip
+	if trip.IsBookable {
+		if (req.DriverID != nil && *req.DriverID == "") || (req.ConductorID != nil && *req.ConductorID == "") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot remove staff from a published trip. Please unpublish the trip first."})
+			return
+		}
 	}
 
 	// Validate driver if provided

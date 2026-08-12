@@ -300,6 +300,15 @@ func (r *ScheduledTripRepository) GetBookableTrips(startDate, endDate time.Time)
 
 // Update updates a scheduled trip
 func (r *ScheduledTripRepository) Update(trip *models.ScheduledTrip) error {
+	var driverID interface{} = trip.AssignedDriverID
+	if trip.AssignedDriverID != nil && *trip.AssignedDriverID == "" {
+		driverID = nil
+	}
+	var conductorID interface{} = trip.AssignedConductorID
+	if trip.AssignedConductorID != nil && *trip.AssignedConductorID == "" {
+		conductorID = nil
+	}
+
 	query := `
 		UPDATE scheduled_trips
 		SET assigned_driver_id = $2, assigned_conductor_id = $3,
@@ -311,7 +320,7 @@ func (r *ScheduledTripRepository) Update(trip *models.ScheduledTrip) error {
 
 	err := r.db.QueryRow(
 		query,
-		trip.ID, trip.AssignedDriverID, trip.AssignedConductorID,
+		trip.ID, driverID, conductorID,
 		trip.Status, trip.CancellationReason, trip.CancelledAt,
 		trip.BaseFare, trip.DepartureDatetime,
 	).Scan(&trip.UpdatedAt)
@@ -849,20 +858,32 @@ func (r *ScheduledTripRepository) AssignStaffAndPermit(tripID string, driverID, 
 	updates := []string{}
 
 	if driverID != nil {
+		var val interface{} = driverID
+		if *driverID == "" {
+			val = nil
+		}
 		updates = append(updates, fmt.Sprintf("assigned_driver_id = $%d", argPosition))
-		args = append(args, driverID)
+		args = append(args, val)
 		argPosition++
 	}
 
 	if conductorID != nil {
+		var val interface{} = conductorID
+		if *conductorID == "" {
+			val = nil
+		}
 		updates = append(updates, fmt.Sprintf("assigned_conductor_id = $%d", argPosition))
-		args = append(args, conductorID)
+		args = append(args, val)
 		argPosition++
 	}
 
 	if permitID != nil {
+		var val interface{} = permitID
+		if *permitID == "" {
+			val = nil
+		}
 		updates = append(updates, fmt.Sprintf("permit_id = $%d", argPosition))
-		args = append(args, permitID)
+		args = append(args, val)
 		argPosition++
 	}
 
