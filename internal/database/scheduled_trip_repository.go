@@ -77,7 +77,7 @@ func (r *ScheduledTripRepository) GetByScheduleAndDate(scheduleID string, date t
 			   is_bookable, ever_published, base_fare, status, cancellation_reason, cancelled_at,
 			   assignment_deadline, created_at, updated_at
 		FROM scheduled_trips
-		WHERE trip_schedule_id = $1 AND DATE(departure_datetime) = $2
+		WHERE trip_schedule_id = $1 AND DATE(departure_datetime AT TIME ZONE 'Asia/Colombo') = $2
 	`
 
 	return r.scanTrip(r.db.QueryRow(query, scheduleID, date))
@@ -108,7 +108,7 @@ func (r *ScheduledTripRepository) GetByScheduleIDsAndDateRange(scheduleIDs []str
 			   assignment_deadline, created_at, updated_at
 		FROM scheduled_trips
 		WHERE trip_schedule_id IN (%s)
-		  AND DATE(departure_datetime) BETWEEN $1 AND $2
+		  AND DATE(departure_datetime AT TIME ZONE 'Asia/Colombo') BETWEEN $1 AND $2
 		ORDER BY departure_datetime
 	`, strings.Join(placeholders, ", "))
 
@@ -165,7 +165,7 @@ func (r *ScheduledTripRepository) GetByScheduleIDsAndDateRangeWithRouteInfo(sche
 		LEFT JOIN bus_owner_routes bor ON COALESCE(st.bus_owner_route_id, ts.bus_owner_route_id) = bor.id
 		LEFT JOIN master_routes mr ON bor.master_route_id = mr.id
 		WHERE st.trip_schedule_id IN (%s)
-		  AND DATE(st.departure_datetime) BETWEEN $1 AND $2
+		  AND DATE(st.departure_datetime AT TIME ZONE 'Asia/Colombo') BETWEEN $1 AND $2
 		ORDER BY st.departure_datetime
 	`, strings.Join(placeholders, ", "))
 
@@ -209,7 +209,7 @@ func (r *ScheduledTripRepository) GetSpecialTripsByBusOwnerAndDateRange(busOwner
 		LEFT JOIN master_routes mr ON bor.master_route_id = mr.id
 		WHERE st.trip_schedule_id IS NULL
 		  AND bor.bus_owner_id = $1
-		  AND DATE(st.departure_datetime) BETWEEN $2 AND $3
+		  AND DATE(st.departure_datetime AT TIME ZONE 'Asia/Colombo') BETWEEN $2 AND $3
 		ORDER BY st.departure_datetime
 	`
 
@@ -241,7 +241,7 @@ func (r *ScheduledTripRepository) GetByDateRange(startDate, endDate time.Time) (
 			   seat_layout_id, is_bookable, ever_published, base_fare, status, cancellation_reason, cancelled_at,
 			   assignment_deadline, created_at, updated_at
 		FROM scheduled_trips
-		WHERE DATE(departure_datetime) BETWEEN $1 AND $2
+		WHERE DATE(departure_datetime AT TIME ZONE 'Asia/Colombo') BETWEEN $1 AND $2
 		ORDER BY departure_datetime
 	`
 
@@ -262,7 +262,7 @@ func (r *ScheduledTripRepository) GetByPermitAndDateRange(permitID string, start
 			   seat_layout_id, is_bookable, ever_published, base_fare, status, cancellation_reason, cancelled_at,
 			   assignment_deadline, created_at, updated_at
 		FROM scheduled_trips
-		WHERE permit_id = $1 AND DATE(departure_datetime) BETWEEN $2 AND $3
+		WHERE permit_id = $1 AND DATE(departure_datetime AT TIME ZONE 'Asia/Colombo') BETWEEN $2 AND $3
 		ORDER BY departure_datetime
 	`
 
@@ -284,7 +284,7 @@ func (r *ScheduledTripRepository) GetBookableTrips(startDate, endDate time.Time)
 			   assignment_deadline, created_at, updated_at
 		FROM scheduled_trips
 		WHERE is_bookable = true
-		  AND DATE(departure_datetime) BETWEEN $1 AND $2
+		  AND DATE(departure_datetime AT TIME ZONE 'Asia/Colombo') BETWEEN $1 AND $2
 		  AND status IN ('scheduled', 'confirmed')
 		ORDER BY departure_datetime
 	`
@@ -940,7 +940,7 @@ func (r *ScheduledTripRepository) GetAssignedTripsForStaff(staffID string, start
 		LEFT JOIN bus_owner_routes bor ON COALESCE(st.bus_owner_route_id, ts.bus_owner_route_id) = bor.id
 		LEFT JOIN master_routes mr ON bor.master_route_id = mr.id
 		WHERE (st.assigned_driver_id = $1 OR st.assigned_conductor_id = $1)
-		  AND DATE(st.departure_datetime) BETWEEN $2 AND $3
+		  AND DATE(st.departure_datetime AT TIME ZONE 'Asia/Colombo') BETWEEN $2 AND $3
 		  AND st.status NOT IN ('cancelled', 'completed')
 		ORDER BY st.departure_datetime ASC
 	`
