@@ -93,7 +93,7 @@ type SendSMSResponse struct {
 	Data    struct {
 		CampaignID         int           `json:"campaignId"`
 		CampaignCost       float64       `json:"campaignCost"`
-		WalletBalance      FlexibleFloat `json:"walletBalance"`
+		WalletBalance      interface{} `json:"walletBalance"`
 		DuplicatesRemoved  int           `json:"duplicatesRemoved"`
 		InvalidNumbers     int           `json:"invalidNumbers"`
 		MaskBlockedNumbers int           `json:"mask_blocked_numbers"`
@@ -131,7 +131,7 @@ func (d *DialogGateway) GetAccessToken() error {
 		return fmt.Errorf("failed to marshal login request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/login", d.apiURL)
+	url := fmt.Sprintf("%s/user/login", d.apiURL)
 	fmt.Printf("🌐 Login URL: %s\n", url)
 	fmt.Printf("👤 Username: %s\n", d.username)
 	fmt.Printf("🔑 Password: %s (length: %d)\n", strings.Repeat("*", len(d.password)), len(d.password))
