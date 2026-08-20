@@ -308,7 +308,7 @@ func (h *TripScheduleHandler) CreateSchedule(c *gin.Context) {
 		ValidFrom:                validFrom,
 		ValidUntil:               validUntil,
 		Notes:                    req.Notes,
-	}
+	} 
 
 	// Default advance booking hours
 	if schedule.AdvanceBookingHours == 0 {
