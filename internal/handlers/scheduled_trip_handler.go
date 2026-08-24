@@ -484,8 +484,9 @@ func (h *ScheduledTripHandler) UpdateTrip(c *gin.Context) {
 			"2006-01-02",
 		}
 		
+		slLoc := time.FixedZone("Asia/Colombo", 5*3600+30*60)
 		for _, layout := range layouts {
-			parsedTime, err = time.Parse(layout, *req.DepartureDatetime)
+			parsedTime, err = time.ParseInLocation(layout, *req.DepartureDatetime, slLoc)
 			if err == nil {
 				break
 			}

@@ -979,7 +979,7 @@ func (r *ScheduledTripRepository) CheckStaffConflictWithRouteInfo(staffID string
 		LEFT JOIN master_routes mr ON bor.master_route_id = mr.id
 		WHERE (st.assigned_driver_id = $1 OR st.assigned_conductor_id = $1)
 		  AND st.status NOT IN ('cancelled', 'completed')
-		  AND st.id != $2
+		  AND ($2 = '' OR st.id != NULLIF($2, '')::uuid)
 		  AND st.departure_datetime < $3
 		  AND (st.departure_datetime + (COALESCE(st.estimated_duration_minutes, 60) || ' minutes')::interval) > $4
 		LIMIT 1
