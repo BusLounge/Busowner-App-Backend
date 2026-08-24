@@ -758,16 +758,23 @@ func (h *ScheduledTripHandler) CreateSpecialTrip(c *gin.Context) {
 					"approved_seats":  *permit.ApprovedSeatingCapacity,
 				},
 			})
-			return
 		}
-	} // Parse departure datetime
-	departureDatetime, _ := time.Parse(time.RFC3339, req.DepartureDatetime) // Already validated in Validate()
+	}
 
-	// If parsing as RFC3339 fails, try ISO 8601 formats
-	if departureDatetime.IsZero() {
-		formats := []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05"}
+	// Parse departure datetime (defaulting to Asia/Colombo Sri Lanka timezone if no offset provided)
+	slLoc := time.FixedZone("Asia/Colombo", 5*3600+30*60)
+	var departureDatetime time.Time
+	if dt, err := time.Parse(time.RFC3339, req.DepartureDatetime); err == nil {
+		departureDatetime = dt
+	} else {
+		formats := []string{
+			"2006-01-02T15:04:05.999999999Z07:00",
+			"2006-01-02T15:04:05.999999999",
+			"2006-01-02T15:04:05",
+			"2006-01-02 15:04:05",
+		}
 		for _, format := range formats {
-			if dt, err := time.Parse(format, req.DepartureDatetime); err == nil {
+			if dt, err := time.ParseInLocation(format, req.DepartureDatetime, slLoc); err == nil {
 				departureDatetime = dt
 				break
 			}
