@@ -95,17 +95,27 @@ func (r *CreateSpecialTripRequest) Validate() error {
 	var departureDatetime time.Time
 	var err error
 
-	// Try ISO 8601 with timezone
-	departureDatetime, err = time.Parse(time.RFC3339, r.DepartureDatetime)
-	if err != nil {
-		// Try common datetime format without timezone
-		departureDatetime, err = time.Parse("2006-01-02 15:04:05", r.DepartureDatetime)
-		if err != nil {
-			// Try with T separator
-			departureDatetime, err = time.Parse("2006-01-02T15:04:05", r.DepartureDatetime)
-			if err != nil {
-				return errors.New("departure_datetime must be in ISO 8601 format (e.g., 2025-11-20T22:00:00Z or 2025-11-20 22:00:00)")
+	// Parse departure_datetime (if no timezone offset, default to Asia/Colombo Sri Lanka timezone)
+	slLoc := time.FixedZone("Asia/Colombo", 5*3600+30*60)
+	if dt, parseErr := time.Parse(time.RFC3339, r.DepartureDatetime); parseErr == nil {
+		departureDatetime = dt
+	} else {
+		formats := []string{
+			"2006-01-02T15:04:05.999999999Z07:00",
+			"2006-01-02T15:04:05.999999999",
+			"2006-01-02T15:04:05",
+			"2006-01-02 15:04:05",
+		}
+		for _, format := range formats {
+			if dt, parseErr := time.ParseInLocation(format, r.DepartureDatetime, slLoc); parseErr == nil {
+				departureDatetime = dt
+				err = nil
+				break
 			}
+			err = parseErr
+		}
+		if err != nil {
+			return errors.New("departure_datetime must be in ISO 8601 format (e.g., 2025-11-20T22:00:00Z or 2025-11-20 22:00:00)")
 		}
 	}
 
