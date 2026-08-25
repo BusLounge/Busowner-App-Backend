@@ -798,20 +798,9 @@ func (h *ScheduledTripHandler) CreateSpecialTrip(c *gin.Context) {
 	now := time.Now()
 	requiresImmediateAssignment := assignmentDeadline.Before(now) || assignmentDeadline.Sub(now) < 1*time.Hour
 
-	if requiresImmediateAssignment {
-		// Verify resources are assigned
-		if req.BusID == nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "Trip date is too soon. Bus assignment is required.",
-				"details": map[string]interface{}{
-					"assignment_deadline": assignmentDeadline.Format(time.RFC3339),
-					"current_time":        now.Format(time.RFC3339),
-				},
-			})
-			return
-		}
-
-		// Verify bus ownership
+	var seatLayoutID *string
+	if req.BusID != nil {
+		// Verify bus ownership and fetch seat layout
 		bus, err := h.busRepo.GetByID(*req.BusID)
 		if err != nil {
 			if err == sql.ErrNoRows {
@@ -826,6 +815,19 @@ func (h *ScheduledTripHandler) CreateSpecialTrip(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Access denied to this bus"})
 			return
 		}
+
+		if bus.SeatLayoutID != nil {
+			seatLayoutID = bus.SeatLayoutID
+		}
+	} else if requiresImmediateAssignment {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Trip date is too soon. Bus assignment is required.",
+			"details": map[string]interface{}{
+				"assignment_deadline": assignmentDeadline.Format(time.RFC3339),
+				"current_time":        now.Format(time.RFC3339),
+			},
+		})
+		return
 	}
 
 	// Create special trip
@@ -834,6 +836,7 @@ func (h *ScheduledTripHandler) CreateSpecialTrip(c *gin.Context) {
 		BusOwnerRouteID:          &req.CustomRouteID,
 		PermitID:                 req.PermitID,
 		BusID:                    req.BusID,
+		SeatLayoutID:             seatLayoutID,
 		DepartureDatetime:        departureDatetime,
 		EstimatedDurationMinutes: req.EstimatedDurationMinutes,
 		AssignedDriverID:         req.AssignedDriverID,
@@ -902,6 +905,16 @@ func (h *ScheduledTripHandler) CreateSpecialTrip(c *gin.Context) {
 			"details": err.Error(),
 		})
 		return
+	}
+
+	// Auto-create trip seats from the layout if seat layout is assigned
+	if seatLayoutID != nil && *seatLayoutID != "" {
+		seatsCreated, err := h.tripSeatRepo.CreateTripSeatsFromLayout(trip.ID, *seatLayoutID, trip.BaseFare)
+		if err != nil {
+			log.Printf("CreateSpecialTrip: Failed to auto-create trip seats for trip %s: %v", trip.ID, err)
+		} else {
+			log.Printf("CreateSpecialTrip: Auto-created %d seats from layout %s for special trip %s", seatsCreated, *seatLayoutID, trip.ID)
+		}
 	}
 
 	c.JSON(http.StatusCreated, trip)
