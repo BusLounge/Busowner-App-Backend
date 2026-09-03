@@ -247,6 +247,65 @@ type CreateTripScheduleRequest struct {
 	Notes                    *string  `json:"notes,omitempty"`
 }
 
+// UpdateTripScheduleRequest represents the request to update an existing trip schedule
+type UpdateTripScheduleRequest struct {
+	PermitID                 *string  `json:"permit_id,omitempty"`
+	BusID                    *string  `json:"bus_id,omitempty"`
+	ScheduleName             *string  `json:"schedule_name,omitempty"`
+	RecurrenceType           string   `json:"recurrence_type" binding:"required,oneof=daily weekly specific_dates interval"`
+	RecurrenceDays           []int    `json:"recurrence_days,omitempty"`
+	SpecificDates            []string `json:"specific_dates,omitempty"`
+	DepartureTime            string   `json:"departure_time" binding:"required"`
+	EstimatedDurationMinutes *int     `json:"estimated_duration_minutes,omitempty"`
+	BaseFare                 float64  `json:"base_fare" binding:"required,gt=0"`
+	IsBookable               bool     `json:"is_bookable"`
+	MaxBookableSeats         *int     `json:"max_bookable_seats,omitempty"`
+	AdvanceBookingHours      int      `json:"advance_booking_hours"`
+	DefaultDriverID          *string  `json:"default_driver_id,omitempty"`
+	DefaultConductorID       *string  `json:"default_conductor_id,omitempty"`
+	SelectedStopIDs          []string `json:"selected_stop_ids,omitempty"`
+	ValidFrom                string   `json:"valid_from" binding:"required"`
+	ValidUntil               *string  `json:"valid_until,omitempty"`
+	Notes                    *string  `json:"notes,omitempty"`
+}
+
+// Validate validates the update trip schedule request
+func (r *UpdateTripScheduleRequest) Validate() error {
+	switch RecurrenceType(r.RecurrenceType) {
+	case RecurrenceWeekly:
+		if len(r.RecurrenceDays) == 0 {
+			return errors.New("recurrence_days is required for weekly schedules")
+		}
+		for _, day := range r.RecurrenceDays {
+			if day < 0 || day > 6 {
+				return errors.New("recurrence_days must contain values between 0 (Sunday) and 6 (Saturday)")
+			}
+		}
+	case RecurrenceSpecificDates:
+		if len(r.SpecificDates) == 0 {
+			return errors.New("specific_dates is required for specific_dates recurrence type")
+		}
+	}
+
+	if _, err := time.Parse("15:04", r.DepartureTime); err != nil {
+		if _, err := time.Parse("15:04:05", r.DepartureTime); err != nil {
+			return errors.New("departure_time must be in HH:MM or HH:MM:SS format")
+		}
+	}
+
+	if _, err := time.Parse("2006-01-02", r.ValidFrom); err != nil {
+		return errors.New("valid_from must be in YYYY-MM-DD format")
+	}
+
+	if r.ValidUntil != nil && *r.ValidUntil != "" {
+		if _, err := time.Parse("2006-01-02", *r.ValidUntil); err != nil {
+			return errors.New("valid_until must be in YYYY-MM-DD format")
+		}
+	}
+
+	return nil
+}
+
 // Validate validates the create trip schedule request
 func (r *CreateTripScheduleRequest) Validate() error {
 	// Check recurrence type specific validations

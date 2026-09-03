@@ -380,7 +380,7 @@ func (h *TripScheduleHandler) UpdateSchedule(c *gin.Context) {
 		return
 	}
 
-	var req models.CreateTripScheduleRequest
+	var req models.UpdateTripScheduleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request", "details": err.Error()})
 		return
@@ -392,9 +392,12 @@ func (h *TripScheduleHandler) UpdateSchedule(c *gin.Context) {
 		return
 	}
 
-	// Update fields
-	if req.PermitID != "" {
-		schedule.PermitID = &req.PermitID
+	// Update fields: Only assign PermitID if a valid permit exists in permits table
+	if req.PermitID != nil && *req.PermitID != "" {
+		permit, err := h.permitRepo.GetByID(*req.PermitID)
+		if err == nil && permit != nil {
+			schedule.PermitID = req.PermitID
+		}
 	}
 	schedule.BusID = req.BusID
 	schedule.ScheduleName = req.ScheduleName
