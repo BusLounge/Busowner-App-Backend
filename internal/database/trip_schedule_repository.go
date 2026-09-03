@@ -266,6 +266,13 @@ func (r *TripScheduleRepository) GetActiveSchedulesForDate(date time.Time) ([]mo
 
 // Update updates a trip schedule
 func (r *TripScheduleRepository) Update(schedule *models.TripSchedule) error {
+	if schedule.PermitID != nil && *schedule.PermitID == "" {
+		schedule.PermitID = nil
+	}
+	if schedule.BusID != nil && *schedule.BusID == "" {
+		schedule.BusID = nil
+	}
+
 	query := `
 		UPDATE trip_schedules
 		SET bus_id = $2, permit_id = $3, schedule_name = $4, recurrence_type = $5,
