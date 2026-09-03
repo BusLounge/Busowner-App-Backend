@@ -268,24 +268,19 @@ func (r *TripScheduleRepository) GetActiveSchedulesForDate(date time.Time) ([]mo
 func (r *TripScheduleRepository) Update(schedule *models.TripSchedule) error {
 	query := `
 		UPDATE trip_schedules
-		SET bus_id = $2, schedule_name = $3, recurrence_type = $4,
-			recurrence_days = $5, specific_dates = $6, departure_time = $7,
-			base_fare = $8, is_bookable = $9, max_bookable_seats = $10,
-			advance_booking_hours = $11, default_driver_id = $12,
-			default_conductor_id = $13, selected_stop_ids = $14,
-			is_active = $15, valid_from = $16, valid_until = $17,
-			notes = $18, updated_at = NOW()
+		SET bus_id = $2, permit_id = $3, schedule_name = $4, recurrence_type = $5,
+			recurrence_days = $6, recurrence_interval = $7, departure_time = $8,
+			estimated_duration_minutes = $9, base_fare = $10, is_active = $11,
+			valid_from = $12, valid_until = $13, notes = $14, updated_at = NOW()
 		WHERE id = $1
 		RETURNING updated_at
 	`
 
 	err := r.db.QueryRow(
 		query,
-		schedule.ID, schedule.BusID, schedule.ScheduleName, schedule.RecurrenceType,
-		schedule.RecurrenceDays, schedule.SpecificDates, schedule.DepartureTime,
-		schedule.BaseFare, schedule.IsBookable, schedule.MaxBookableSeats,
-		schedule.AdvanceBookingHours, schedule.DefaultDriverID,
-		schedule.DefaultConductorID, schedule.SelectedStopIDs,
+		schedule.ID, schedule.BusID, schedule.PermitID, schedule.ScheduleName,
+		schedule.RecurrenceType, schedule.RecurrenceDays, schedule.RecurrenceInterval,
+		schedule.DepartureTime, schedule.EstimatedDurationMinutes, schedule.BaseFare,
 		schedule.IsActive, schedule.ValidFrom, schedule.ValidUntil,
 		schedule.Notes,
 	).Scan(&schedule.UpdatedAt)
@@ -300,9 +295,9 @@ func (r *TripScheduleRepository) Delete(scheduleID string) error {
 	return err
 }
 
-// Deactivate deactivates a trip schedule
+// Deactivate deactivates or toggles active status of a trip schedule
 func (r *TripScheduleRepository) Deactivate(scheduleID string) error {
-	query := `UPDATE trip_schedules SET is_active = false, updated_at = NOW() WHERE id = $1`
+	query := `UPDATE trip_schedules SET is_active = NOT is_active, updated_at = NOW() WHERE id = $1`
 	_, err := r.db.Exec(query, scheduleID)
 	return err
 }
