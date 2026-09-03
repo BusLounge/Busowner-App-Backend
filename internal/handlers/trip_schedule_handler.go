@@ -393,11 +393,17 @@ func (h *TripScheduleHandler) UpdateSchedule(c *gin.Context) {
 	}
 
 	// Update fields
+	if req.PermitID != "" {
+		schedule.PermitID = &req.PermitID
+	}
 	schedule.BusID = req.BusID
 	schedule.ScheduleName = req.ScheduleName
 	schedule.RecurrenceType = models.RecurrenceType(req.RecurrenceType)
 	schedule.RecurrenceDays = models.IntSliceToString(req.RecurrenceDays)
 	schedule.DepartureTime = req.DepartureTime
+	if req.EstimatedDurationMinutes != nil {
+		schedule.EstimatedDurationMinutes = req.EstimatedDurationMinutes
+	}
 	schedule.BaseFare = req.BaseFare
 	schedule.IsBookable = req.IsBookable
 	schedule.MaxBookableSeats = req.MaxBookableSeats

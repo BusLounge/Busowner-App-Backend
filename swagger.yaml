@@ -11996,6 +11996,59 @@ paths:
           $ref: '#/components/responses/AccountNotVerifiedError'
         '500':
           $ref: '#/components/responses/InternalServerError'
+    delete:
+      summary: Delete trip schedule
+      description: Delete a trip schedule template
+      operationId: deleteTripSchedule
+      tags:
+      - Trip Schedules
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Schedule deleted successfully
+        '404':
+          description: Schedule not found
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AccountNotVerifiedError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/trip-schedules/{id}/deactivate:
+    post:
+      summary: Deactivate or toggle trip schedule
+      description: Deactivate or toggle active state of a trip schedule template
+      operationId: deactivateTripSchedule
+      tags:
+      - Trip Schedules
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Schedule deactivated successfully
+        '404':
+          description: Schedule not found
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AccountNotVerifiedError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /api/v1/scheduled-trips:
     get:
       summary: Get scheduled trips by date range
