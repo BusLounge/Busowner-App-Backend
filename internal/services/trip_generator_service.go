@@ -16,6 +16,7 @@ type TripGeneratorService struct {
 	busRepo           *database.BusRepository
 	seatLayoutRepo    *database.BusSeatLayoutRepository
 	settingsRepo      *database.SystemSettingRepository
+	stopCh            chan struct{}
 }
 
 // NewTripGeneratorService creates a new TripGeneratorService
@@ -32,6 +33,52 @@ func NewTripGeneratorService(
 		busRepo:           busRepo,
 		seatLayoutRepo:    seatLayoutRepo,
 		settingsRepo:      settingsRepo,
+		stopCh:            make(chan struct{}),
+	}
+}
+
+// StartBackgroundWorker starts the periodic background trip generator worker
+func (s *TripGeneratorService) StartBackgroundWorker(interval time.Duration) {
+	fmt.Printf("🕐 Starting Trip Generator Background Worker (interval: %v)\n", interval)
+	go s.runWorker(interval)
+}
+
+// StopBackgroundWorker stops the periodic background trip generator worker
+func (s *TripGeneratorService) StopBackgroundWorker() {
+	fmt.Println("🛑 Stopping Trip Generator Background Worker")
+	close(s.stopCh)
+}
+
+func (s *TripGeneratorService) runWorker(interval time.Duration) {
+	// Startup run after 20 seconds so DB connection and migrations are completely settled
+	select {
+	case <-time.After(20 * time.Second):
+		count, err := s.FillMissingTrips()
+		if err != nil {
+			fmt.Printf("⚠️ Trip Generator startup check error: %v\n", err)
+		} else if count > 0 {
+			fmt.Printf("✓ Trip Generator startup: filled %d missing trips\n", count)
+		}
+	case <-s.stopCh:
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			count, err := s.FillMissingTrips()
+			if err != nil {
+				fmt.Printf("⚠️ Trip Generator periodic check error: %v\n", err)
+			} else if count > 0 {
+				fmt.Printf("✓ Trip Generator periodic check: generated %d new trips\n", count)
+			}
+		case <-s.stopCh:
+			fmt.Println("Trip Generator worker stopped")
+			return
+		}
 	}
 }
 
@@ -194,18 +241,20 @@ func (s *TripGeneratorService) GenerateTripsForNewSchedule(schedule *models.Trip
 		fmt.Printf("Using current time as start date: %s\n", startDate.Format("2006-01-02"))
 	}
 
-	// Get days ahead from system settings (default: 7)
-	daysAhead := s.settingsRepo.GetIntValue("trip_generation_days_ahead", 7)
-	fmt.Printf("Days ahead to generate: %d\n", daysAhead)
-
-	// Generate for configured days ahead
-	endDate := startDate.AddDate(0, 0, daysAhead)
-	fmt.Printf("End date (before valid_until check): %s\n", endDate.Format("2006-01-02"))
-
-	// Don't exceed valid_until
-	if schedule.ValidUntil != nil && endDate.After(*schedule.ValidUntil) {
+	var endDate time.Time
+	if schedule.ValidUntil != nil {
 		endDate = *schedule.ValidUntil
-		fmt.Printf("Adjusted end date to valid_until: %s\n", endDate.Format("2006-01-02"))
+		maxEnd := startDate.AddDate(0, 0, 180)
+		if endDate.After(maxEnd) {
+			endDate = maxEnd
+			fmt.Printf("ValidUntil capped at 180-day safety limit: %s\n", endDate.Format("2006-01-02"))
+		} else {
+			fmt.Printf("Using explicit ValidUntil as end date: %s\n", endDate.Format("2006-01-02"))
+		}
+	} else {
+		daysAhead := s.settingsRepo.GetIntValue("trip_generation_days_ahead", 30)
+		endDate = startDate.AddDate(0, 0, daysAhead)
+		fmt.Printf("Indefinite schedule: generating %d days ahead to: %s\n", daysAhead, endDate.Format("2006-01-02"))
 	}
 
 	fmt.Printf("Final date range: %s to %s\n", startDate.Format("2006-01-02"), endDate.Format("2006-01-02"))
@@ -343,7 +392,6 @@ func (s *TripGeneratorService) GenerateFutureTrips() (int, error) {
 
 // RegenerateTripsForSchedule regenerates trips for a schedule (useful after updates)
 // Regenerates only future trips that haven't started yet
-// Uses trip_generation_days_ahead from system_settings (default: 7 days)
 func (s *TripGeneratorService) RegenerateTripsForSchedule(schedule *models.TripSchedule) (int, error) {
 	startDate := getLocalDateOnly(time.Now())
 
@@ -352,15 +400,20 @@ func (s *TripGeneratorService) RegenerateTripsForSchedule(schedule *models.TripS
 		startDate = schedule.ValidFrom
 	}
 
-	// Get days ahead from system settings (default: 7)
-	daysAhead := s.settingsRepo.GetIntValue("trip_generation_days_ahead", 7)
-
-	// Generate for configured days ahead
-	endDate := startDate.AddDate(0, 0, daysAhead)
-
-	// Don't exceed valid_until
-	if schedule.ValidUntil != nil && endDate.After(*schedule.ValidUntil) {
+	var endDate time.Time
+	if schedule.ValidUntil != nil {
 		endDate = *schedule.ValidUntil
+		maxEnd := startDate.AddDate(0, 0, 180)
+		if endDate.After(maxEnd) {
+			endDate = maxEnd
+			fmt.Printf("Regenerate: ValidUntil capped at 180-day safety limit: %s\n", endDate.Format("2006-01-02"))
+		} else {
+			fmt.Printf("Regenerate: Using explicit ValidUntil as end date: %s\n", endDate.Format("2006-01-02"))
+		}
+	} else {
+		daysAhead := s.settingsRepo.GetIntValue("trip_generation_days_ahead", 30)
+		endDate = startDate.AddDate(0, 0, daysAhead)
+		fmt.Printf("Regenerate: Indefinite schedule generating %d days ahead to: %s\n", daysAhead, endDate.Format("2006-01-02"))
 	}
 
 	// Note: This will skip trips that already exist (handled in GenerateTripsForSchedule)
@@ -376,16 +429,15 @@ func (s *TripGeneratorService) CleanupOldTrips(daysToKeep int) error {
 }
 
 // FillMissingTrips scans for any gaps in scheduled trips and fills them
-// Useful for recovering from downtime or errors
-// Uses trip_generation_days_ahead from system_settings for range
+// Useful for recovering from downtime or errors and rolling forward indefinite schedules
 func (s *TripGeneratorService) FillMissingTrips() (int, error) {
 	startDate := getLocalDateOnly(time.Now())
 
-	// Get days ahead from system settings (default: 7)
-	daysAhead := s.settingsRepo.GetIntValue("trip_generation_days_ahead", 7)
-	endDate := startDate.AddDate(0, 0, daysAhead)
+	// Default lookahead for indefinite schedules is 30 days
+	daysAhead := s.settingsRepo.GetIntValue("trip_generation_days_ahead", 30)
+	defaultEndDate := startDate.AddDate(0, 0, daysAhead)
 
-	schedules, err := s.scheduleRepo.GetActiveSchedulesForDate(startDate)
+	schedules, err := s.scheduleRepo.GetAllActiveTimetables()
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch active schedules: %w", err)
 	}
@@ -393,15 +445,26 @@ func (s *TripGeneratorService) FillMissingTrips() (int, error) {
 	totalGenerated := 0
 
 	for _, schedule := range schedules {
-		// Respect schedule's valid_from and valid_until
+		// Respect schedule's valid_from
 		scheduleStartDate := startDate
 		if schedule.ValidFrom.After(startDate) {
 			scheduleStartDate = schedule.ValidFrom
 		}
 
-		scheduleEndDate := endDate
-		if schedule.ValidUntil != nil && endDate.After(*schedule.ValidUntil) {
+		var scheduleEndDate time.Time
+		if schedule.ValidUntil != nil {
 			scheduleEndDate = *schedule.ValidUntil
+			maxEnd := scheduleStartDate.AddDate(0, 0, 180)
+			if scheduleEndDate.After(maxEnd) {
+				scheduleEndDate = maxEnd
+			}
+		} else {
+			scheduleEndDate = defaultEndDate
+		}
+
+		// Skip if end date is in the past or before start date
+		if scheduleEndDate.Before(scheduleStartDate) {
+			continue
 		}
 
 		generated, err := s.GenerateTripsForSchedule(&schedule, scheduleStartDate, scheduleEndDate)

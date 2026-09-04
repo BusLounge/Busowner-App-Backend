@@ -442,6 +442,10 @@ func main() {
 	intentExpirationService.Start()
 	defer intentExpirationService.Stop()
 
+	// Start background worker for trip generation (maintains rolling window for indefinite schedules)
+	tripGeneratorSvc.StartBackgroundWorker(6 * time.Hour)
+	defer tripGeneratorSvc.StopBackgroundWorker()
+
 	// Initialize Gin router
 	router := gin.New()
 
