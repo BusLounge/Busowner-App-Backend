@@ -256,7 +256,19 @@ func (h *TripScheduleHandler) CreateSchedule(c *gin.Context) {
 
 	var validUntil *time.Time
 	if req.ValidUntil != nil {
-		parsed, _ := time.Parse("2006-01-02", *req.ValidUntil)
+		parsed, err := time.Parse("2006-01-02", *req.ValidUntil)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid valid_until date format", "details": err.Error()})
+			return
+		}
+		if parsed.Before(validFrom) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "valid_until must be on or after valid_from"})
+			return
+		}
+		if parsed.Sub(validFrom) > 180*24*time.Hour {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Schedule validity cannot exceed 180 days (6 months)"})
+			return
+		}
 		validUntil = &parsed
 	}
 
@@ -420,7 +432,19 @@ func (h *TripScheduleHandler) UpdateSchedule(c *gin.Context) {
 	schedule.ValidFrom = validFrom
 
 	if req.ValidUntil != nil {
-		parsed, _ := time.Parse("2006-01-02", *req.ValidUntil)
+		parsed, err := time.Parse("2006-01-02", *req.ValidUntil)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid valid_until date format", "details": err.Error()})
+			return
+		}
+		if parsed.Before(validFrom) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "valid_until must be on or after valid_from"})
+			return
+		}
+		if parsed.Sub(validFrom) > 180*24*time.Hour {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Schedule validity cannot exceed 180 days (6 months)"})
+			return
+		}
 		schedule.ValidUntil = &parsed
 	} else {
 		schedule.ValidUntil = nil
@@ -655,6 +679,14 @@ func (h *TripScheduleHandler) CreateTimetable(c *gin.Context) {
 		parsed, err := time.Parse("2006-01-02", *req.ValidUntil)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid valid_until date format", "details": err.Error()})
+			return
+		}
+		if parsed.Before(validFrom) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "valid_until must be on or after valid_from"})
+			return
+		}
+		if parsed.Sub(validFrom) > 180*24*time.Hour {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Schedule validity cannot exceed 180 days (6 months)"})
 			return
 		}
 		validUntil = &parsed
