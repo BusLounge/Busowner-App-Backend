@@ -3,7 +3,9 @@ package handlers
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,18 +16,20 @@ import (
 )
 
 type BusOwnerHandler struct {
-	busOwnerRepo *database.BusOwnerRepository
-	permitRepo   *database.RoutePermitRepository
-	userRepo     *database.UserRepository
-	staffRepo    *database.BusStaffRepository
+	busOwnerRepo      *database.BusOwnerRepository
+	permitRepo        *database.RoutePermitRepository
+	userRepo          *database.UserRepository
+	staffRepo         *database.BusStaffRepository
+	scheduledTripRepo *database.ScheduledTripRepository
 }
 
-func NewBusOwnerHandler(busOwnerRepo *database.BusOwnerRepository, permitRepo *database.RoutePermitRepository, userRepo *database.UserRepository, staffRepo *database.BusStaffRepository) *BusOwnerHandler {
+func NewBusOwnerHandler(busOwnerRepo *database.BusOwnerRepository, permitRepo *database.RoutePermitRepository, userRepo *database.UserRepository, staffRepo *database.BusStaffRepository, scheduledTripRepo *database.ScheduledTripRepository) *BusOwnerHandler {
 	return &BusOwnerHandler{
-		busOwnerRepo: busOwnerRepo,
-		permitRepo:   permitRepo,
-		userRepo:     userRepo,
-		staffRepo:    staffRepo,
+		busOwnerRepo:      busOwnerRepo,
+		permitRepo:        permitRepo,
+		userRepo:          userRepo,
+		staffRepo:         staffRepo,
+		scheduledTripRepo: scheduledTripRepo,
 	}
 }
 
@@ -896,3 +900,74 @@ func (h *BusOwnerHandler) UnlinkStaff(c *gin.Context) {
 		"staff_id": req.StaffID,
 	})
 }
+
+// GetStaffTrips retrieves upcoming or past trip history for a staff member of this bus owner
+// GET /api/v1/bus-owner/staff/:staff_id/trips
+func (h *BusOwnerHandler) GetStaffTrips(c *gin.Context) {
+	userCtx, exists := middleware.GetUserContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	busOwner, err := h.busOwnerRepo.GetByUserID(userCtx.UserID.String())
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Bus owner profile not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get bus owner profile"})
+		return
+	}
+
+	staffID := c.Param("staff_id")
+	if staffID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Staff ID is required"})
+		return
+	}
+
+	// Verify staff exists and is currently employed by this bus owner
+	currentEmployment, err := h.staffRepo.GetCurrentEmployment(staffID)
+	if err != nil || currentEmployment == nil || currentEmployment.BusOwnerID != busOwner.ID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "This staff member is not currently employed by your organization"})
+		return
+	}
+
+	tripType := c.DefaultQuery("type", "all") // "upcoming", "history", "all"
+	limitStr := c.DefaultQuery("limit", "20")
+	pageStr := c.DefaultQuery("page", "1")
+
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit <= 0 {
+		limit = 20
+	}
+	page, err := strconv.Atoi(pageStr)
+	if err != nil || page <= 0 {
+		page = 1
+	}
+	offset := (page - 1) * limit
+
+	trips, err := h.scheduledTripRepo.GetTripsForStaffMember(staffID, tripType, limit, offset)
+	if err != nil {
+		log.Printf("GetStaffTrips: error fetching trips: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "fetch_failed",
+			"message": "Failed to fetch trips for staff member",
+		})
+		return
+	}
+
+	if trips == nil {
+		trips = []models.StaffTripItem{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"staff_id": staffID,
+		"type":     tripType,
+		"limit":    limit,
+		"page":     page,
+		"count":    len(trips),
+		"trips":    trips,
+	})
+}
+

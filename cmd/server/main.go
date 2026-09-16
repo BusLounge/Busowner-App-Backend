@@ -247,7 +247,7 @@ func main() {
 	logger.Info("✓ Active Trip tracking system initialized")
 
 	// Initialize bus owner and permit handlers
-	busOwnerHandler := handlers.NewBusOwnerHandler(ownerRepository, permitRepository, userRepository, staffRepository)
+	busOwnerHandler := handlers.NewBusOwnerHandler(ownerRepository, permitRepository, userRepository, staffRepository, scheduledTripRepo)
 	permitHandler := handlers.NewPermitHandler(permitRepository, ownerRepository, masterRouteRepo)
 	busHandler := handlers.NewBusHandler(busRepository, permitRepository, ownerRepository)
 	masterRouteHandler := handlers.NewMasterRouteHandler(masterRouteRepo)
@@ -642,6 +642,7 @@ func main() {
 			busOwner.GET("/profile-status", busOwnerHandler.CheckProfileStatus)
 			busOwner.POST("/complete-onboarding", busOwnerHandler.CompleteOnboarding)
 			busOwner.GET("/staff", busOwnerHandler.GetStaff) // Get all staff (no verification needed)
+			busOwner.GET("/staff/:staff_id/trips", busOwnerHandler.GetStaffTrips) // Get staff trips (upcoming & history)
 
 			// Staff management (requires verification)
 			busOwner.POST("/staff", middleware.RequireVerifiedBusOwner(ownerRepository), busOwnerHandler.AddStaff)           // Add driver or conductor
