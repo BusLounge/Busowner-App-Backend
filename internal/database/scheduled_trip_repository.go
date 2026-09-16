@@ -962,6 +962,137 @@ func (r *ScheduledTripRepository) GetAssignedTripsForStaff(staffID string, start
 	return trips, nil
 }
 
+// GetTripsForStaffMember retrieves trips (upcoming, history, or all) for a specific staff member
+func (r *ScheduledTripRepository) GetTripsForStaffMember(staffID string, tripType string, limit, offset int) ([]models.StaffTripItem, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	whereClause := "(st.assigned_driver_id = $1 OR st.assigned_conductor_id = $1)"
+	orderClause := "st.departure_datetime DESC"
+
+	switch tripType {
+	case "upcoming":
+		// Upcoming trips: future departure and not cancelled or completed
+		whereClause += " AND st.departure_datetime >= NOW() AND st.status NOT IN ('cancelled', 'completed')"
+		orderClause = "st.departure_datetime ASC"
+	case "history":
+		// Past or finished/cancelled trips
+		whereClause += " AND (st.departure_datetime < NOW() OR st.status IN ('cancelled', 'completed'))"
+		orderClause = "st.departure_datetime DESC"
+	default:
+		orderClause = "st.departure_datetime DESC"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT 
+			st.id,
+			st.trip_schedule_id,
+			st.departure_datetime,
+			st.estimated_duration_minutes,
+			st.status,
+			CASE WHEN st.assigned_driver_id = $1 THEN 'driver' ELSE 'conductor' END as role,
+			COALESCE(rp.bus_registration_number, b.license_plate, b.bus_number, '') as bus_registration_number,
+			b.bus_type,
+			mr.route_number,
+			mr.origin_city,
+			mr.destination_city,
+			bor.direction,
+			st.base_fare,
+			st.cancellation_reason
+		FROM scheduled_trips st
+		LEFT JOIN trip_schedules ts ON st.trip_schedule_id = ts.id
+		LEFT JOIN bus_owner_routes bor ON COALESCE(st.bus_owner_route_id, ts.bus_owner_route_id) = bor.id
+		LEFT JOIN master_routes mr ON bor.master_route_id = mr.id
+		LEFT JOIN route_permits rp ON st.permit_id = rp.id
+		LEFT JOIN buses b ON rp.bus_registration_number = b.license_plate
+		WHERE %s
+		ORDER BY %s
+		LIMIT $2 OFFSET $3
+	`, whereClause, orderClause)
+
+	rows, err := r.db.Query(query, staffID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query staff trips: %w", err)
+	}
+	defer rows.Close()
+
+	var trips []models.StaffTripItem
+	for rows.Next() {
+		var item models.StaffTripItem
+		var tripScheduleID sql.NullString
+		var estimatedDurationMinutes sql.NullInt64
+		var busRegNum sql.NullString
+		var busType sql.NullString
+		var routeNumber sql.NullString
+		var originCity sql.NullString
+		var destinationCity sql.NullString
+		var direction sql.NullString
+		var cancellationReason sql.NullString
+
+		err := rows.Scan(
+			&item.ID,
+			&tripScheduleID,
+			&item.DepartureDatetime,
+			&estimatedDurationMinutes,
+			&item.Status,
+			&item.Role,
+			&busRegNum,
+			&busType,
+			&routeNumber,
+			&originCity,
+			&destinationCity,
+			&direction,
+			&item.BaseFare,
+			&cancellationReason,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan staff trip: %w", err)
+		}
+
+		if tripScheduleID.Valid {
+			item.TripScheduleID = &tripScheduleID.String
+		}
+		if estimatedDurationMinutes.Valid {
+			duration := int(estimatedDurationMinutes.Int64)
+			item.EstimatedDurationMinutes = &duration
+		}
+		if busRegNum.Valid && busRegNum.String != "" {
+			item.BusRegistrationNumber = &busRegNum.String
+		}
+		if busType.Valid && busType.String != "" {
+			item.BusType = &busType.String
+		}
+		if routeNumber.Valid {
+			item.RouteNumber = &routeNumber.String
+		}
+		if originCity.Valid {
+			item.OriginCity = &originCity.String
+		}
+		if destinationCity.Valid {
+			item.DestinationCity = &destinationCity.String
+		}
+		if direction.Valid {
+			item.Direction = &direction.String
+		}
+		if cancellationReason.Valid {
+			item.CancellationReason = &cancellationReason.String
+		}
+
+		trips = append(trips, item)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+
+	return trips, nil
+}
+
+
 // CheckStaffConflictWithRouteInfo checks if a driver or conductor is already assigned to a concurrent trip and returns route details.
 // An overlap exists if: StartA < EndB AND StartB < EndA.
 func (r *ScheduledTripRepository) CheckStaffConflictWithRouteInfo(staffID string, excludeTripID string, departureTime time.Time, durationMinutes int) (*models.ScheduledTripWithRouteInfo, error) {
