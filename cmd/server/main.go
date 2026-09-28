@@ -602,6 +602,15 @@ func main() {
 			user.GET("/profile", authHandler.GetProfile)
 			user.PUT("/profile", authHandler.UpdateProfile)
 			user.POST("/complete-basic-profile", authHandler.CompleteBasicProfile) // Simple first_name + last_name for passengers
+
+			// Dual-verification phone number change
+			changePhone := user.Group("/change-phone")
+			{
+				changePhone.POST("/request-current-otp", authHandler.RequestPhoneChangeCurrentOTP)
+				changePhone.POST("/verify-current-otp", authHandler.VerifyPhoneChangeCurrentOTP)
+				changePhone.POST("/request-new-otp", authHandler.RequestPhoneChangeNewOTP)
+				changePhone.POST("/confirm", authHandler.ConfirmPhoneChange)
+			}
 		}
 
 		// Staff routes
