@@ -1334,6 +1334,174 @@ paths:
                     example: This endpoint is only for passengers
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /api/v1/user/change-phone/request-current-otp:
+    post:
+      summary: Request OTP for current phone
+      description: Sends a 6-digit verification code to the authenticated user's current registered phone number.
+      operationId: requestChangePhoneCurrentOtp
+      tags:
+      - User
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: OTP sent successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  phone:
+                    type: string
+                  expires_in:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: Rate limit exceeded
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/user/change-phone/verify-current-otp:
+    post:
+      summary: Verify OTP for current phone
+      description: Verifies the OTP sent to the current phone and generates a temporary signed change ticket.
+      operationId: verifyChangePhoneCurrentOtp
+      tags:
+      - User
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - otp
+              properties:
+                otp:
+                  type: string
+                  example: '123456'
+      responses:
+        '200':
+          description: Current phone verified successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  ticket:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/user/change-phone/request-new-otp:
+    post:
+      summary: Request OTP for new phone
+      description: Validates change ticket, verifies new phone is not already in use, and sends OTP to new phone.
+      operationId: requestChangePhoneNewOtp
+      tags:
+      - User
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - ticket
+              - new_phone
+              properties:
+                ticket:
+                  type: string
+                new_phone:
+                  type: string
+                  example: '0771234567'
+      responses:
+        '200':
+          description: OTP sent to new phone
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  phone:
+                    type: string
+                  expires_in:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Phone already registered to another account
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/user/change-phone/confirm:
+    post:
+      summary: Confirm phone change
+      description: Validates new phone OTP and ticket, updates database, revokes old refresh tokens, and issues new tokens.
+      operationId: confirmPhoneChange
+      tags:
+      - User
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - ticket
+              - new_phone
+              - otp
+              properties:
+                ticket:
+                  type: string
+                new_phone:
+                  type: string
+                  example: '0771234567'
+                otp:
+                  type: string
+                  example: '123456'
+      responses:
+        '200':
+          description: Phone number updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  access_token:
+                    type: string
+                  refresh_token:
+                    type: string
+                  phone:
+                    type: string
+                  user:
+                    type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Phone already registered
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /api/v1/admin/auth/login:
     post:
       summary: Admin login
