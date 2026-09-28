@@ -2554,3 +2554,319 @@ func (h *AuthHandler) VerifyOTPGeneric(c *gin.Context) {
 		Roles:           user.Roles, // Will be empty for new users
 	})
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DUAL-VERIFICATION (DOUBLE OTP) PHONE NUMBER CHANGE HANDLERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+type VerifyPhoneChangeCurrentOTPRequest struct {
+	OTP string `json:"otp" binding:"required"`
+}
+
+type RequestPhoneChangeNewOTPRequest struct {
+	Ticket   string `json:"ticket" binding:"required"`
+	NewPhone string `json:"new_phone" binding:"required"`
+}
+
+type ConfirmPhoneChangeRequest struct {
+	Ticket   string `json:"ticket" binding:"required"`
+	NewPhone string `json:"new_phone" binding:"required"`
+	OTP      string `json:"otp" binding:"required"`
+}
+
+// RequestPhoneChangeCurrentOTP handles Step 1: Send OTP to currently authenticated phone
+// POST /api/v1/user/change-phone/request-current-otp
+func (h *AuthHandler) RequestPhoneChangeCurrentOTP(c *gin.Context) {
+	userCtx, exists := middleware.GetUserContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "User not authenticated"})
+		return
+	}
+
+	phone := userCtx.Phone
+	if phone == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "missing_phone", Message: "No phone registered for current user"})
+		return
+	}
+
+	clientIP := utils.GetRealIP(c)
+	userAgent := utils.GetUserAgent(c)
+
+	if err := h.rateLimitService.CheckOTPRateLimit(phone, clientIP); err != nil {
+		c.JSON(http.StatusTooManyRequests, ErrorResponse{Error: "rate_limit_exceeded", Message: "Too many OTP requests. Please try again later."})
+		return
+	}
+
+	otp, err := h.otpService.GenerateOTPForApp(phone, clientIP, userAgent, "bus_owner")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "otp_generation_failed", Message: "Failed to generate verification code"})
+		return
+	}
+
+	_ = h.rateLimitService.RecordOTPRequest(phone, clientIP)
+	h.auditService.LogOTPRequest(phone, clientIP, userAgent, true, "phone_change_current")
+
+	expiresAt, _ := h.otpService.GetOTPExpiry(phone)
+	expiresIn := int(time.Until(expiresAt).Seconds())
+
+	if h.config.SMS.Mode == "production" {
+		_, err := h.smsGateway.SendOTP(phone, otp, "bus_owner")
+		if err != nil {
+			log.Printf("❌ Failed to send phone change OTP to current phone %s: %v", phone, err)
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "sms_send_failed", Message: "Failed to send verification SMS to your current number."})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message":    "Verification code sent to your current phone number",
+			"phone":      phone,
+			"expires_in": expiresIn,
+		})
+		return
+	}
+
+	log.Printf("🧪 DEV MODE CURRENT PHONE OTP | phone=%s | otp=%s", phone, otp)
+	c.JSON(http.StatusOK, gin.H{
+		"message":    "Verification code generated (dev mode)",
+		"phone":      phone,
+		"expires_in": expiresIn,
+		"otp":        otp,
+	})
+}
+
+// VerifyPhoneChangeCurrentOTP handles Step 1 verification: Validate current phone OTP and return change ticket
+// POST /api/v1/user/change-phone/verify-current-otp
+func (h *AuthHandler) VerifyPhoneChangeCurrentOTP(c *gin.Context) {
+	userCtx, exists := middleware.GetUserContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "User not authenticated"})
+		return
+	}
+
+	var req VerifyPhoneChangeCurrentOTPRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "validation_error", Message: "Verification code is required"})
+		return
+	}
+
+	clientIP := utils.GetRealIP(c)
+	userAgent := utils.GetUserAgent(c)
+
+	valid, err := h.otpService.ValidateOTP(userCtx.Phone, req.OTP)
+	if err != nil || !valid {
+		h.auditService.LogOTPVerification(&userCtx.UserID, userCtx.Phone, false, 1, clientIP, userAgent, "current_phone_failed")
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_otp", Message: "Invalid or expired verification code for your current phone"})
+		return
+	}
+
+	ticket, err := h.jwtService.GeneratePhoneChangeTicket(userCtx.UserID, userCtx.Phone)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "ticket_generation_failed", Message: "Failed to generate phone change ticket"})
+		return
+	}
+
+	h.auditService.LogOTPVerification(&userCtx.UserID, userCtx.Phone, true, 1, clientIP, userAgent, "current_phone_verified")
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Current phone verified successfully",
+		"ticket":  ticket,
+	})
+}
+
+// RequestPhoneChangeNewOTP handles Step 2: Validate ticket & uniqueness, send OTP to new phone
+// POST /api/v1/user/change-phone/request-new-otp
+func (h *AuthHandler) RequestPhoneChangeNewOTP(c *gin.Context) {
+	userCtx, exists := middleware.GetUserContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "User not authenticated"})
+		return
+	}
+
+	var req RequestPhoneChangeNewOTPRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "validation_error", Message: "New phone number and verification ticket are required"})
+		return
+	}
+
+	claims, err := h.jwtService.ValidatePhoneChangeTicket(req.Ticket)
+	if err != nil || claims.UserID != userCtx.UserID {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "invalid_ticket", Message: "Verification ticket has expired or is invalid. Please verify your current phone again."})
+		return
+	}
+
+	newPhone, err := h.phoneValidator.Validate(req.NewPhone)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_phone", Message: err.Error()})
+		return
+	}
+
+	if newPhone == userCtx.Phone {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "same_phone", Message: "The new phone number cannot be the same as your current phone number."})
+		return
+	}
+
+	taken, err := h.userRepository.IsPhoneTaken(newPhone, userCtx.UserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "check_failed", Message: "Failed to check phone number availability"})
+		return
+	}
+	if taken {
+		c.JSON(http.StatusConflict, ErrorResponse{Error: "phone_already_registered", Message: "This phone number is already registered to another account."})
+		return
+	}
+
+	clientIP := utils.GetRealIP(c)
+	userAgent := utils.GetUserAgent(c)
+
+	if err := h.rateLimitService.CheckOTPRateLimit(newPhone, clientIP); err != nil {
+		c.JSON(http.StatusTooManyRequests, ErrorResponse{Error: "rate_limit_exceeded", Message: "Too many OTP requests for this number. Please try again later."})
+		return
+	}
+
+	otp, err := h.otpService.GenerateOTPForApp(newPhone, clientIP, userAgent, "bus_owner")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "otp_generation_failed", Message: "Failed to generate verification code"})
+		return
+	}
+
+	_ = h.rateLimitService.RecordOTPRequest(newPhone, clientIP)
+
+	expiresAt, _ := h.otpService.GetOTPExpiry(newPhone)
+	expiresIn := int(time.Until(expiresAt).Seconds())
+
+	if h.config.SMS.Mode == "production" {
+		_, err := h.smsGateway.SendOTP(newPhone, otp, "bus_owner")
+		if err != nil {
+			log.Printf("❌ Failed to send phone change OTP to new phone %s: %v", newPhone, err)
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "sms_send_failed", Message: "Failed to send verification SMS to your new number."})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message":    "Verification code sent to your new phone number",
+			"phone":      newPhone,
+			"expires_in": expiresIn,
+		})
+		return
+	}
+
+	log.Printf("🧪 DEV MODE NEW PHONE OTP | phone=%s | otp=%s", newPhone, otp)
+	c.JSON(http.StatusOK, gin.H{
+		"message":    "Verification code generated (dev mode)",
+		"phone":      newPhone,
+		"expires_in": expiresIn,
+		"otp":        otp,
+	})
+}
+
+// ConfirmPhoneChange handles Step 2 confirmation: Validate ticket & OTP, atomic DB update, session renewal
+// POST /api/v1/user/change-phone/confirm
+func (h *AuthHandler) ConfirmPhoneChange(c *gin.Context) {
+	userCtx, exists := middleware.GetUserContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "User not authenticated"})
+		return
+	}
+
+	var req ConfirmPhoneChangeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "validation_error", Message: "New phone, code, and verification ticket are required"})
+		return
+	}
+
+	claims, err := h.jwtService.ValidatePhoneChangeTicket(req.Ticket)
+	if err != nil || claims.UserID != userCtx.UserID {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "invalid_ticket", Message: "Verification ticket has expired or is invalid. Please start over."})
+		return
+	}
+
+	newPhone, err := h.phoneValidator.Validate(req.NewPhone)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_phone", Message: err.Error()})
+		return
+	}
+
+	taken, err := h.userRepository.IsPhoneTaken(newPhone, userCtx.UserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "check_failed", Message: "Failed to check phone number availability"})
+		return
+	}
+	if taken {
+		c.JSON(http.StatusConflict, ErrorResponse{Error: "phone_already_registered", Message: "This phone number is already registered to another account."})
+		return
+	}
+
+	clientIP := utils.GetRealIP(c)
+	userAgent := utils.GetUserAgent(c)
+
+	valid, err := h.otpService.ValidateOTP(newPhone, req.OTP)
+	if err != nil || !valid {
+		h.auditService.LogOTPVerification(&userCtx.UserID, newPhone, false, 1, clientIP, userAgent, "new_phone_failed")
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid_otp", Message: "Invalid or expired verification code for your new phone"})
+		return
+	}
+
+	// Atomically update phone in database
+	if err := h.userRepository.UpdatePhone(userCtx.UserID, newPhone); err != nil {
+		log.Printf("❌ Failed to update phone for user %s: %v", userCtx.UserID, err)
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "update_failed", Message: "Failed to update phone number in database"})
+		return
+	}
+
+	// Revoke old refresh tokens for security
+	_ = h.refreshTokenRepository.RevokeAllUserTokens(userCtx.UserID)
+
+	// Fetch updated user to get accurate roles and completion status
+	user, err := h.userRepository.GetUserByID(userCtx.UserID)
+	if err != nil {
+		log.Printf("❌ Failed to fetch updated user %s: %v", userCtx.UserID, err)
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Phone number updated successfully. Please re-login.",
+			"phone":   newPhone,
+		})
+		return
+	}
+
+	// Generate fresh tokens with updated phone in claims
+	accessToken, err := h.jwtService.GenerateAccessToken(user.ID, user.Phone, user.Roles, user.ProfileCompleted)
+	if err != nil {
+		log.Printf("❌ Failed to generate access token after phone change: %v", err)
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Phone number updated successfully. Please re-login.",
+			"phone":   newPhone,
+		})
+		return
+	}
+
+	refreshToken, err := h.jwtService.GenerateRefreshToken(user.ID, user.Phone)
+	if err == nil {
+		deviceID := c.GetHeader("X-Device-ID")
+		deviceType := c.GetHeader("X-Device-Type")
+		_ = h.refreshTokenRepository.StoreRefreshToken(
+			user.ID,
+			refreshToken,
+			deviceID,
+			deviceType,
+			clientIP,
+			userAgent,
+			time.Now().Add(30*24*time.Hour),
+		)
+	}
+
+	h.auditService.LogOTPVerification(&user.ID, newPhone, true, 1, clientIP, userAgent, "phone_changed_success")
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":       "Phone number updated successfully",
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"phone":         newPhone,
+		"user": gin.H{
+			"id":                user.ID,
+			"phone":             user.Phone,
+			"first_name":        user.FirstName,
+			"last_name":         user.LastName,
+			"roles":             user.Roles,
+			"profile_completed": user.ProfileCompleted,
+		},
+	})
+}

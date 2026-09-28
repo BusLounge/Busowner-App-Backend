@@ -629,3 +629,42 @@ func (r *UserRepository) CreateUserWithFullData(
 
 	return user, nil
 }
+
+// UpdatePhone safely updates a user's phone number and updated_at timestamp
+func (r *UserRepository) UpdatePhone(userID uuid.UUID, newPhone string) error {
+	query := `
+		UPDATE users
+		SET phone = $1,
+		    updated_at = $2
+		WHERE id = $3
+	`
+	result, err := r.db.Exec(query, newPhone, time.Now(), userID)
+	if err != nil {
+		return fmt.Errorf("failed to update user phone: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("user not found")
+	}
+
+	return nil
+}
+
+// IsPhoneTaken checks if a phone number is already registered to another user
+func (r *UserRepository) IsPhoneTaken(phone string, excludeUserID uuid.UUID) (bool, error) {
+	query := `SELECT id FROM users WHERE phone = $1 AND id != $2 LIMIT 1`
+	var existingID uuid.UUID
+	err := r.db.QueryRow(query, phone, excludeUserID).Scan(&existingID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check if phone is taken: %w", err)
+	}
+	return true, nil
+}

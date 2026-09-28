@@ -179,3 +179,61 @@ func (s *Service) GetTokenExpiry(tokenString string) (time.Time, error) {
 
 	return claims.ExpiresAt.Time, nil
 }
+
+// PhoneChangeClaims represents temporary claims for dual-verification phone change
+type PhoneChangeClaims struct {
+	UserID       uuid.UUID `json:"user_id"`
+	CurrentPhone string    `json:"current_phone"`
+	Action       string    `json:"action"`
+	jwt.RegisteredClaims
+}
+
+// GeneratePhoneChangeTicket generates a signed 15-minute verification ticket
+func (s *Service) GeneratePhoneChangeTicket(userID uuid.UUID, currentPhone string) (string, error) {
+	now := time.Now()
+	claims := PhoneChangeClaims{
+		UserID:       userID,
+		CurrentPhone: currentPhone,
+		Action:       "phone_change_verified_current",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(now.Add(15 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			Issuer:    "smarttransit-sms-auth",
+			Subject:   userID.String(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte(s.accessSecret))
+	if err != nil {
+		return "", fmt.Errorf("failed to sign phone change ticket: %w", err)
+	}
+
+	return tokenString, nil
+}
+
+// ValidatePhoneChangeTicket validates a phone change ticket
+func (s *Service) ValidatePhoneChangeTicket(ticketString string) (*PhoneChangeClaims, error) {
+	token, err := jwt.ParseWithClaims(ticketString, &PhoneChangeClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(s.accessSecret), nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("invalid ticket: %w", err)
+	}
+
+	claims, ok := token.Claims.(*PhoneChangeClaims)
+	if !ok || !token.Valid {
+		return nil, fmt.Errorf("invalid ticket claims")
+	}
+
+	if claims.Action != "phone_change_verified_current" {
+		return nil, fmt.Errorf("invalid ticket action")
+	}
+
+	return claims, nil
+}
