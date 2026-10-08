@@ -268,3 +268,29 @@ func (r *BusOwnerRepository) UpdateProfile(busOwnerID string, companyName, ident
 
 	return nil
 }
+
+// UpdateBankAccountDetails updates the bus owner's bank account details JSONB
+func (r *BusOwnerRepository) UpdateBankAccountDetails(busOwnerID string, bankDetails models.JSONB) error {
+	query := `
+		UPDATE bus_owners
+		SET bank_account_details = $1,
+		    updated_at = NOW()
+		WHERE id = $2
+	`
+
+	result, err := r.db.Exec(query, bankDetails, busOwnerID)
+	if err != nil {
+		return fmt.Errorf("failed to update bank account details: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("bus owner not found")
+	}
+
+	return nil
+}
