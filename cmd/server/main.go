@@ -665,6 +665,7 @@ func main() {
 			busOwner.GET("/profile", busOwnerHandler.GetProfile)
 			busOwner.GET("/profile-status", busOwnerHandler.CheckProfileStatus)
 			busOwner.POST("/complete-onboarding", busOwnerHandler.CompleteOnboarding)
+			busOwner.PUT("/bank-details", busOwnerHandler.UpdateBankDetails)
 			busOwner.GET("/staff", busOwnerHandler.GetStaff) // Get all staff (no verification needed)
 			busOwner.GET("/staff/:staff_id/trips", busOwnerHandler.GetStaffTrips) // Get staff trips (upcoming & history)
 

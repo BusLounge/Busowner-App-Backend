@@ -971,3 +971,58 @@ func (h *BusOwnerHandler) GetStaffTrips(c *gin.Context) {
 	})
 }
 
+// UpdateBankDetails updates the bus owner's receiving bank account details
+// PUT /api/v1/bus-owner/bank-details
+func (h *BusOwnerHandler) UpdateBankDetails(c *gin.Context) {
+	userCtx, exists := middleware.GetUserContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	busOwner, err := h.busOwnerRepo.GetByUserID(userCtx.UserID.String())
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Bus owner profile not found"})
+		return
+	}
+
+	var req struct {
+		BankName          string `json:"bank_name" binding:"required"`
+		AccountNumber     string `json:"account_number" binding:"required"`
+		AccountHolderName string `json:"account_holder_name" binding:"required"`
+		BranchCode        string `json:"branch_code"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Invalid bank details request",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	bankJSON := models.JSONB{
+		"bank_name":           req.BankName,
+		"account_number":      req.AccountNumber,
+		"account_holder_name": req.AccountHolderName,
+		"branch_code":         req.BranchCode,
+	}
+
+	if err := h.busOwnerRepo.UpdateBankAccountDetails(busOwner.ID, bankJSON); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update bank details: " + err.Error()})
+		return
+	}
+
+	updatedOwner, err := h.busOwnerRepo.GetByID(busOwner.ID)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success":              true,
+			"message":              "Bank account details saved successfully",
+			"bank_account_details": bankJSON,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, updatedOwner)
+}
+
