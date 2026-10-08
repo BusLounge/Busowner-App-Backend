@@ -39,6 +39,9 @@ type Config struct {
 	// Payment gateway configuration
 	Payment PaymentConfig
 
+	// PayHere configuration
+	PayHere PayHereConfig
+
 	// Cloudinary configuration
 	CloudinaryURL string
 
@@ -59,6 +62,13 @@ type PaymentConfig struct {
 	LogoURL       string // Merchant logo URL for payment page
 	ReturnURL     string // URL to redirect after payment (app deep link)
 	WebhookURL    string // Server webhook URL for payment notifications
+}
+
+// PayHereConfig holds PayHere configuration
+type PayHereConfig struct {
+	Environment    string // "sandbox" or "production"
+	MerchantID     string
+	MerchantSecret string
 }
 
 // ServerConfig holds server-related configuration
@@ -195,6 +205,11 @@ func Load() (*Config, error) {
 			LogoURL:       getEnv("PAYABLE_LOGO_URL", ""),
 			ReturnURL:     getEnv("PAYABLE_RETURN_URL", ""),
 			WebhookURL:    getEnv("PAYABLE_WEBHOOK_URL", ""),
+		},
+		PayHere: PayHereConfig{
+			Environment:    getEnv("PAYHERE_ENVIRONMENT", "sandbox"),
+			MerchantID:     getEnv("PAYHERE_MERCHANT_ID", "1237200"),
+			MerchantSecret: getEnv("PAYHERE_MERCHANT_SECRET", "MjM2MzMzNjQzODMwMjI2MDgwMDIyMTE3OTEwNDA1NTU1ODkzMTg"),
 		},
 		CloudinaryURL:       getEnv("CLOUDINARY_URL", ""),
 		OneSignalAppID:      getEnv("ONESIGNAL_APP_ID", ""),

@@ -19,6 +19,7 @@ import (
 	"github.com/smarttransit/sms-auth-backend/internal/services"
 	"github.com/smarttransit/sms-auth-backend/pkg/jwt"
 	"github.com/smarttransit/sms-auth-backend/pkg/onesignal"
+	"github.com/smarttransit/sms-auth-backend/pkg/payhere"
 	"github.com/smarttransit/sms-auth-backend/pkg/sms"
 	"github.com/smarttransit/sms-auth-backend/pkg/validator"
 )
@@ -436,6 +437,20 @@ func main() {
 		logger,
 	)
 	logger.Info("✓ Booking Orchestration system initialized")
+
+	// ============================================================================
+	// WALLET & SETTLEMENTS SYSTEM (Admin API Spec + PayHere Payouts)
+	// ============================================================================
+	logger.Info("💰 Initializing Wallet & Settlement system with PayHere...")
+	walletRepo := database.NewWalletRepository(sqlxDB.DB)
+	payhereClient := payhere.NewClient(payhere.Config{
+		Environment:    cfg.PayHere.Environment,
+		MerchantID:     cfg.PayHere.MerchantID,
+		MerchantSecret: cfg.PayHere.MerchantSecret,
+	}, logger)
+	walletService := services.NewWalletService(walletRepo, payhereClient, logger)
+	walletHandler := handlers.NewWalletHandler(walletService)
+	logger.Info("✓ Wallet & Settlement system initialized")
 
 	// Start background job for intent expiration
 	intentExpirationService := services.NewIntentExpirationService(bookingIntentRepo, logger)
@@ -1292,6 +1307,44 @@ func main() {
 			// Search analytics
 			admin.GET("/search/analytics", searchHandler.GetSearchAnalytics)
 		}
+
+		// ============================================================================
+		// WALLET & SETTLEMENTS (Admin Spec + PayHere Sandbox Withdrawals)
+		// ============================================================================
+		logger.Info("💳 Registering Wallet & Settlement routes...")
+		walletRoutes := v1.Group("/wallet")
+		walletRoutes.Use(middleware.AuthMiddleware(jwtService))
+		{
+			logger.Info("  ✅ GET  /api/v1/wallet/status")
+			walletRoutes.GET("/status", walletHandler.GetWalletStatus)
+			logger.Info("  ✅ GET  /api/v1/wallet/transactions")
+			walletRoutes.GET("/transactions", walletHandler.GetWalletTransactions)
+			logger.Info("  ✅ POST /api/v1/wallet/withdraw")
+			walletRoutes.POST("/withdraw", walletHandler.Withdraw)
+		}
+
+		settlementRoutes := v1.Group("/settlements")
+		settlementRoutes.Use(middleware.AuthMiddleware(jwtService))
+		{
+			logger.Info("  ✅ GET  /api/v1/settlements/pending")
+			settlementRoutes.GET("/pending", walletHandler.GetPendingEarnings)
+			logger.Info("  ✅ POST /api/v1/settlements/special-request")
+			settlementRoutes.POST("/special-request", walletHandler.RequestSpecialPayout)
+		}
+		logger.Info("💳 Wallet & Settlement routes registered successfully")
+	}
+
+	// ============================================================================
+	// MOBILE ALIAS GROUP (/api/mobile) MATCHING ADMIN SPEC
+	// ============================================================================
+	mobile := router.Group("/api/mobile")
+	mobile.Use(middleware.AuthMiddleware(jwtService))
+	{
+		mobile.GET("/wallet/status", walletHandler.GetWalletStatus)
+		mobile.GET("/wallet/transactions", walletHandler.GetWalletTransactions)
+		mobile.POST("/wallet/withdraw", walletHandler.Withdraw)
+		mobile.GET("/settlements/pending", walletHandler.GetPendingEarnings)
+		mobile.POST("/settlements/special-request", walletHandler.RequestSpecialPayout)
 	}
 
 	// Create HTTP server
