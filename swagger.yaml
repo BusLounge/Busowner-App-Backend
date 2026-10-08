@@ -73,6 +73,8 @@ tags:
   description: Staff registration and management
 - name: Bus Owner
   description: Bus owner profile and onboarding management
+- name: Wallet
+  description: Wallet balance, payouts and settlement operations
 - name: Lounge Owner
   description: Lounge owner registration and management
 - name: Uploads
@@ -3675,6 +3677,248 @@ paths:
                   profile_completed:
                     type: boolean
                     example: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/bus-owner/bank-details:
+    put:
+      summary: Update bus owner bank account details
+      description: Update the default receiving bank details for the bus owner
+      operationId: updateBusOwnerBankDetails
+      tags:
+      - Bus Owner
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - bank_name
+              - account_number
+              - account_holder_name
+              properties:
+                bank_name:
+                  type: string
+                  example: Commercial Bank of Ceylon
+                account_number:
+                  type: string
+                  example: '100012345678'
+                account_holder_name:
+                  type: string
+                  example: Acme Transport
+                branch_code:
+                  type: string
+                  example: '074'
+      responses:
+        '200':
+          description: Bank details updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Bank details updated successfully
+                  bank_account_details:
+                    type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/wallet/status:
+    get:
+      summary: Get wallet balance and settlement cycle status
+      description: Returns wallet current balance and 14-day payout tracker status
+      operationId: getWalletStatus
+      tags:
+      - Wallet
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Wallet status retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  wallet:
+                    type: object
+                  payout_tracker:
+                    type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/wallet/transactions:
+    get:
+      summary: Get paginated wallet transactions
+      description: Retrieve history of wallet transactions
+      operationId: getWalletTransactions
+      tags:
+      - Wallet
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 1
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 20
+      responses:
+        '200':
+          description: Transactions retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transactions:
+                    type: array
+                    items:
+                      type: object
+                  pagination:
+                    type: object
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/wallet/withdraw:
+    post:
+      summary: Withdraw funds from wallet to bank account
+      description: Process payout via PayHere sandbox and log transaction
+      operationId: withdrawWalletFunds
+      tags:
+      - Wallet
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - amount
+              - bank_name
+              - account_number
+              - account_holder_name
+              properties:
+                amount:
+                  type: number
+                  example: 5000.0
+                bank_name:
+                  type: string
+                  example: Commercial Bank of Ceylon
+                account_number:
+                  type: string
+                  example: '100012345678'
+                account_holder_name:
+                  type: string
+                  example: Acme Transport
+                branch_code:
+                  type: string
+                  example: '074'
+      responses:
+        '200':
+          description: Withdrawal processed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  transaction_id:
+                    type: string
+                  balance_after:
+                    type: number
+                  status:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/settlements/pending:
+    get:
+      summary: Get pending trip earnings in holding period
+      description: Returns upcoming trip payouts pending the 14-day settlement cycle
+      operationId: getPendingSettlements
+      tags:
+      - Wallet
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Pending settlements retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pending_earnings:
+                    type: number
+                  pending_trips:
+                    type: array
+                    items:
+                      type: object
+                  next_payout_date:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/settlements/special-request:
+    post:
+      summary: Request emergency / special settlement release
+      description: Submit an expedited payout request for pending earnings
+      operationId: requestSpecialSettlement
+      tags:
+      - Wallet
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - reason
+              properties:
+                reason:
+                  type: string
+                  example: Urgent vehicle repair
+      responses:
+        '200':
+          description: Request submitted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  request_id:
+                    type: string
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
