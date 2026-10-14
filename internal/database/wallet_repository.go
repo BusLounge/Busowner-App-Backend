@@ -288,3 +288,137 @@ func (r *WalletRepository) WithdrawFunds(ctx context.Context, walletID string, r
 		Status:           "completed",
 	}, nil
 }
+
+// InitializePayoutPreference sets up payout_tracker and records any 7-day special request during onboarding
+func (r *WalletRepository) InitializePayoutPreference(ctx context.Context, userID, payeeType string, frequencyDays int, reason *string) error {
+	hasSpecialRequest := frequencyDays == 7
+	var specialRequestDate interface{} = nil
+	if hasSpecialRequest {
+		specialRequestDate = time.Now()
+	}
+
+	// Active schedule starts at 14 until an admin approves the 7-day request
+	activeFrequency := 14
+
+	trackerQuery := `
+		INSERT INTO payout_tracker (
+			id, payee_user_id, payee_type, payout_frequency_days, days_accumulated, 
+			has_special_request, special_request_date, is_active, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, 0, $5, $6, true, NOW(), NOW())
+		ON CONFLICT (payee_user_id, payee_type)
+		DO UPDATE SET 
+			has_special_request = EXCLUDED.has_special_request,
+			special_request_date = COALESCE(EXCLUDED.special_request_date, payout_tracker.special_request_date),
+			updated_at = NOW()
+	`
+	_, err := r.db.ExecContext(ctx, trackerQuery, uuid.New().String(), userID, payeeType, activeFrequency, hasSpecialRequest, specialRequestDate)
+	if err != nil {
+		return fmt.Errorf("failed to initialize payout tracker: %w", err)
+	}
+
+	// If 7 days was requested and a reason is provided, insert a pending request
+	if hasSpecialRequest && reason != nil && strings.TrimSpace(*reason) != "" {
+		requestQuery := `
+			INSERT INTO payout_frequency_requests (
+				id, user_id, payee_type, requested_frequency_days, reason, status, created_at, updated_at
+			) VALUES ($1, $2, $3, 7, $4, 'pending', NOW(), NOW())
+		`
+		_, err = r.db.ExecContext(ctx, requestQuery, uuid.New().String(), userID, payeeType, strings.TrimSpace(*reason))
+		if err != nil {
+			return fmt.Errorf("failed to record payout frequency request: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// GetPayoutFrequencyStatus retrieves the current active frequency and any pending request
+func (r *WalletRepository) GetPayoutFrequencyStatus(ctx context.Context, userID, payeeType string) (*models.PayoutFrequencyStatusResponse, error) {
+	activeFrequency := 14
+	trackerQuery := `
+		SELECT payout_frequency_days 
+		FROM payout_tracker 
+		WHERE payee_user_id = $1 AND payee_type = $2 
+		LIMIT 1
+	`
+	_ = r.db.QueryRowContext(ctx, trackerQuery, userID, payeeType).Scan(&activeFrequency)
+
+	var pendingReq models.PayoutFrequencyRequest
+	reqQuery := `
+		SELECT id, user_id, payee_type, requested_frequency_days, reason, status, 
+		       admin_notes, reviewed_by, reviewed_at, created_at, updated_at
+		FROM payout_frequency_requests
+		WHERE user_id = $1 AND payee_type = $2 AND status = 'pending'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+	err := r.db.GetContext(ctx, &pendingReq, reqQuery, userID, payeeType)
+	var pendingPtr *models.PayoutFrequencyRequest
+	if err == nil {
+		pendingPtr = &pendingReq
+	}
+
+	return &models.PayoutFrequencyStatusResponse{
+		ActiveFrequencyDays: activeFrequency,
+		PendingRequest:      pendingPtr,
+	}, nil
+}
+
+// RequestPayoutFrequencyChange handles switching to 14 days directly or submitting a 7-day request
+func (r *WalletRepository) RequestPayoutFrequencyChange(ctx context.Context, userID, payeeType string, requestedDays int, reason string) (*models.PayoutFrequencyStatusResponse, error) {
+	if requestedDays == 14 {
+		// Immediate switch back to standard 14 days (no approval needed)
+		updateQuery := `
+			UPDATE payout_tracker 
+			SET payout_frequency_days = 14, has_special_request = false, updated_at = NOW()
+			WHERE payee_user_id = $1 AND payee_type = $2
+		`
+		_, _ = r.db.ExecContext(ctx, updateQuery, userID, payeeType)
+
+		// Cancel any pending 7-day requests
+		cancelQuery := `
+			UPDATE payout_frequency_requests
+			SET status = 'cancelled', updated_at = NOW()
+			WHERE user_id = $1 AND payee_type = $2 AND status = 'pending'
+		`
+		_, _ = r.db.ExecContext(ctx, cancelQuery, userID, payeeType)
+
+		return &models.PayoutFrequencyStatusResponse{
+			ActiveFrequencyDays: 14,
+			PendingRequest:      nil,
+		}, nil
+	}
+
+	// For 7 days, check if already active
+	var currentActive int = 14
+	_ = r.db.QueryRowContext(ctx, `SELECT payout_frequency_days FROM payout_tracker WHERE payee_user_id = $1 AND payee_type = $2`, userID, payeeType).Scan(&currentActive)
+	if currentActive == 7 {
+		return &models.PayoutFrequencyStatusResponse{
+			ActiveFrequencyDays: 7,
+			PendingRequest:      nil,
+		}, nil
+	}
+
+	// Insert into payout_frequency_requests
+	reqID := uuid.New().String()
+	insertQuery := `
+		INSERT INTO payout_frequency_requests (
+			id, user_id, payee_type, requested_frequency_days, reason, status, created_at, updated_at
+		) VALUES ($1, $2, $3, 7, $4, 'pending', NOW(), NOW())
+	`
+	_, err := r.db.ExecContext(ctx, insertQuery, reqID, userID, payeeType, strings.TrimSpace(reason))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create payout frequency request: %w", err)
+	}
+
+	// Flag in payout_tracker
+	updateTracker := `
+		INSERT INTO payout_tracker (id, payee_user_id, payee_type, payout_frequency_days, days_accumulated, has_special_request, special_request_date, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, 14, 0, true, NOW(), true, NOW(), NOW())
+		ON CONFLICT (payee_user_id, payee_type)
+		DO UPDATE SET has_special_request = true, special_request_date = NOW(), updated_at = NOW()
+	`
+	_, _ = r.db.ExecContext(ctx, updateTracker, uuid.New().String(), userID, payeeType)
+
+	return r.GetPayoutFrequencyStatus(ctx, userID, payeeType)
+}

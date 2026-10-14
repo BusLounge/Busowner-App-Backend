@@ -21,15 +21,17 @@ type BusOwnerHandler struct {
 	userRepo          *database.UserRepository
 	staffRepo         *database.BusStaffRepository
 	scheduledTripRepo *database.ScheduledTripRepository
+	walletRepo        *database.WalletRepository
 }
 
-func NewBusOwnerHandler(busOwnerRepo *database.BusOwnerRepository, permitRepo *database.RoutePermitRepository, userRepo *database.UserRepository, staffRepo *database.BusStaffRepository, scheduledTripRepo *database.ScheduledTripRepository) *BusOwnerHandler {
+func NewBusOwnerHandler(busOwnerRepo *database.BusOwnerRepository, permitRepo *database.RoutePermitRepository, userRepo *database.UserRepository, staffRepo *database.BusStaffRepository, scheduledTripRepo *database.ScheduledTripRepository, walletRepo *database.WalletRepository) *BusOwnerHandler {
 	return &BusOwnerHandler{
 		busOwnerRepo:      busOwnerRepo,
 		permitRepo:        permitRepo,
 		userRepo:          userRepo,
 		staffRepo:         staffRepo,
 		scheduledTripRepo: scheduledTripRepo,
+		walletRepo:        walletRepo,
 	}
 }
 
@@ -132,6 +134,8 @@ type CompleteOnboardingRequest struct {
 	IdentityOrIncorporationNo string                            `json:"identity_or_incorporation_no" binding:"required"`
 	BusinessEmail             *string                           `json:"business_email,omitempty"`
 	Permits                   []models.CreateRoutePermitRequest `json:"permits" binding:"required,min=1,dive"`
+	PayoutFrequencyDays       *int                              `json:"payout_frequency_days,omitempty"`
+	PayoutRequestReason       *string                           `json:"payout_request_reason,omitempty"`
 }
 
 // CompleteOnboarding handles the complete onboarding process
@@ -232,6 +236,15 @@ func (h *BusOwnerHandler) CompleteOnboarding(c *gin.Context) {
 	if err != nil {
 		// Log error but don't fail the request
 		// Role might already exist (AddUserRole prevents duplicates)
+	}
+
+	// Initialize payout schedule preference (Step 3 of onboarding)
+	frequencyDays := 14
+	if req.PayoutFrequencyDays != nil && (*req.PayoutFrequencyDays == 7 || *req.PayoutFrequencyDays == 14) {
+		frequencyDays = *req.PayoutFrequencyDays
+	}
+	if h.walletRepo != nil {
+		_ = h.walletRepo.InitializePayoutPreference(c.Request.Context(), userCtx.UserID.String(), "bus_owner", frequencyDays, req.PayoutRequestReason)
 	}
 
 	// Fetch updated profile (should have profile_completed = true now)

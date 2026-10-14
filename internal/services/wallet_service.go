@@ -110,3 +110,13 @@ func (s *WalletService) Withdraw(ctx context.Context, userID string, req *models
 	res.Message = fmt.Sprintf("Withdrawal of LKR %.2f processed successfully via PayHere (%s)", req.Amount, payoutRes.GatewayReference)
 	return res, nil
 }
+
+// GetPayoutFrequencyStatus returns the current payout frequency and any pending change request
+func (s *WalletService) GetPayoutFrequencyStatus(ctx context.Context, userID, payeeType string) (*models.PayoutFrequencyStatusResponse, error) {
+	return s.walletRepo.GetPayoutFrequencyStatus(ctx, userID, payeeType)
+}
+
+// RequestPayoutFrequencyChange processes a request to switch between 14-day and 7-day payout schedules
+func (s *WalletService) RequestPayoutFrequencyChange(ctx context.Context, userID, payeeType string, requestedDays int, reason string) (*models.PayoutFrequencyStatusResponse, error) {
+	return s.walletRepo.RequestPayoutFrequencyChange(ctx, userID, payeeType, requestedDays, reason)
+}

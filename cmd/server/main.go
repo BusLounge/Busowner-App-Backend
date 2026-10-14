@@ -116,6 +116,7 @@ func main() {
 	loungeTransportLocationRepository := database.NewLoungeTransportLocationRepository(sqlxDB.DB)
 	loungeTransportLocationPriceRepository := database.NewLoungeTransportLocationPriceRepository(sqlxDB.DB)
 	seatLayoutRepository := database.NewBusSeatLayoutRepository(sqlxDB.DB)
+	walletRepo := database.NewWalletRepository(sqlxDB.DB)
 
 	// Initialize staff service
 	staffService := services.NewStaffService(staffRepository, ownerRepository, userRepository)
@@ -248,7 +249,7 @@ func main() {
 	logger.Info("✓ Active Trip tracking system initialized")
 
 	// Initialize bus owner and permit handlers
-	busOwnerHandler := handlers.NewBusOwnerHandler(ownerRepository, permitRepository, userRepository, staffRepository, scheduledTripRepo)
+	busOwnerHandler := handlers.NewBusOwnerHandler(ownerRepository, permitRepository, userRepository, staffRepository, scheduledTripRepo, walletRepo)
 	permitHandler := handlers.NewPermitHandler(permitRepository, ownerRepository, masterRouteRepo)
 	busHandler := handlers.NewBusHandler(busRepository, permitRepository, ownerRepository)
 	masterRouteHandler := handlers.NewMasterRouteHandler(masterRouteRepo)
@@ -442,7 +443,6 @@ func main() {
 	// WALLET & SETTLEMENTS SYSTEM (Admin API Spec + PayHere Payouts)
 	// ============================================================================
 	logger.Info("💰 Initializing Wallet & Settlement system with PayHere...")
-	walletRepo := database.NewWalletRepository(sqlxDB.DB)
 	payhereClient := payhere.NewClient(payhere.Config{
 		Environment:    cfg.PayHere.Environment,
 		MerchantID:     cfg.PayHere.MerchantID,
@@ -1331,6 +1331,10 @@ func main() {
 			settlementRoutes.GET("/pending", walletHandler.GetPendingEarnings)
 			logger.Info("  ✅ POST /api/v1/settlements/special-request")
 			settlementRoutes.POST("/special-request", walletHandler.RequestSpecialPayout)
+			logger.Info("  ✅ GET  /api/v1/settlements/payout-frequency/status")
+			settlementRoutes.GET("/payout-frequency/status", walletHandler.GetPayoutFrequencyStatus)
+			logger.Info("  ✅ POST /api/v1/settlements/payout-frequency/request")
+			settlementRoutes.POST("/payout-frequency/request", walletHandler.RequestPayoutFrequencyChange)
 		}
 		logger.Info("💳 Wallet & Settlement routes registered successfully")
 	}
@@ -1346,6 +1350,8 @@ func main() {
 		mobile.POST("/wallet/withdraw", walletHandler.Withdraw)
 		mobile.GET("/settlements/pending", walletHandler.GetPendingEarnings)
 		mobile.POST("/settlements/special-request", walletHandler.RequestSpecialPayout)
+		mobile.GET("/settlements/payout-frequency/status", walletHandler.GetPayoutFrequencyStatus)
+		mobile.POST("/settlements/payout-frequency/request", walletHandler.RequestPayoutFrequencyChange)
 	}
 
 	// Create HTTP server

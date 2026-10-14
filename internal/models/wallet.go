@@ -93,3 +93,30 @@ type WithdrawResponse struct {
 	NewBalance       float64 `json:"new_balance"`
 	Status           string  `json:"status"`
 }
+
+// PayoutFrequencyRequest represents a payout frequency change request (e.g. 7-day expedited)
+type PayoutFrequencyRequest struct {
+	ID                     string     `json:"id" db:"id"`
+	UserID                 string     `json:"user_id" db:"user_id"`
+	PayeeType              string     `json:"payee_type" db:"payee_type"`
+	RequestedFrequencyDays int        `json:"requested_frequency_days" db:"requested_frequency_days"`
+	Reason                 string     `json:"reason" db:"reason"`
+	Status                 string     `json:"status" db:"status"` // "pending", "approved", "rejected"
+	AdminNotes             *string    `json:"admin_notes,omitempty" db:"admin_notes"`
+	ReviewedBy             *string    `json:"reviewed_by,omitempty" db:"reviewed_by"`
+	ReviewedAt             *time.Time `json:"reviewed_at,omitempty" db:"reviewed_at"`
+	CreatedAt              time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at" db:"updated_at"`
+}
+
+// PayoutFrequencyStatusResponse represents the active schedule and any pending request
+type PayoutFrequencyStatusResponse struct {
+	ActiveFrequencyDays int                     `json:"active_frequency_days"`
+	PendingRequest      *PayoutFrequencyRequest `json:"pending_request,omitempty"`
+}
+
+// SubmitPayoutFrequencyRequest represents payload to request a schedule switch
+type SubmitPayoutFrequencyRequest struct {
+	RequestedFrequencyDays int    `json:"requested_frequency_days" binding:"required,oneof=7 14"`
+	Reason                 string `json:"reason"`
+}
