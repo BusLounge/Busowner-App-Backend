@@ -126,3 +126,78 @@ func (h *WalletHandler) Withdraw(c *gin.Context) {
 
 	c.JSON(http.StatusOK, res)
 }
+
+// GetPayoutFrequencyStatus returns the active payout frequency and any pending request
+// GET /api/v1/settlements/payout-frequency/status
+func (h *WalletHandler) GetPayoutFrequencyStatus(c *gin.Context) {
+	userCtx, exists := middleware.GetUserContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	payeeType := "bus_owner"
+	if pt := c.Query("payee_type"); pt != "" {
+		payeeType = pt
+	} else {
+		for _, role := range userCtx.Roles {
+			if role == "lounge_owner" {
+				payeeType = "lounge_owner"
+				break
+			}
+		}
+	}
+
+	status, err := h.walletService.GetPayoutFrequencyStatus(c.Request.Context(), userCtx.UserID.String(), payeeType)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch payout frequency status: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, status)
+}
+
+// RequestPayoutFrequencyChange submits a request to change payout frequency
+// POST /api/v1/settlements/payout-frequency/request
+func (h *WalletHandler) RequestPayoutFrequencyChange(c *gin.Context) {
+	userCtx, exists := middleware.GetUserContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	var req models.SubmitPayoutFrequencyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid request: requested_frequency_days must be 7 or 14",
+		})
+		return
+	}
+
+	if req.RequestedFrequencyDays == 7 && len(req.Reason) < 10 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "A detailed reason (at least 10 characters) is required when requesting a 7-day payout schedule",
+		})
+		return
+	}
+
+	payeeType := "bus_owner"
+	if pt := c.Query("payee_type"); pt != "" {
+		payeeType = pt
+	} else {
+		for _, role := range userCtx.Roles {
+			if role == "lounge_owner" {
+				payeeType = "lounge_owner"
+				break
+			}
+		}
+	}
+
+	res, err := h.walletService.RequestPayoutFrequencyChange(c.Request.Context(), userCtx.UserID.String(), payeeType, req.RequestedFrequencyDays, req.Reason)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update payout frequency preference: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, res)
+}

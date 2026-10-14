@@ -3925,6 +3925,85 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /api/v1/settlements/payout-frequency/status:
+    get:
+      summary: Get active payout schedule and pending request status
+      description: Returns the active payout frequency (14 or 7 days) and details of any pending change request. Shared by bus owners and lounge owners.
+      operationId: getPayoutFrequencyStatus
+      tags:
+      - Wallet
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: payee_type
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [bus_owner, lounge_owner]
+        description: Payee type filter (defaults to user role)
+      responses:
+        '200':
+          description: Payout frequency status retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active_frequency_days:
+                    type: integer
+                    example: 14
+                  pending_request:
+                    type: object
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/settlements/payout-frequency/request:
+    post:
+      summary: Request payout frequency change (14 or 7 days)
+      description: Submit a request to switch payout schedules. Switching to 14 days is automatic; 7 days requires business reason and admin review.
+      operationId: requestPayoutFrequencyChange
+      tags:
+      - Wallet
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - requested_frequency_days
+              properties:
+                requested_frequency_days:
+                  type: integer
+                  enum: [7, 14]
+                  example: 7
+                reason:
+                  type: string
+                  example: Daily fleet diesel expenses and crew cash settlements
+      responses:
+        '200':
+          description: Payout frequency request updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active_frequency_days:
+                    type: integer
+                  pending_request:
+                    type: object
+                    nullable: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /api/v1/bus-owner/staff:
     get:
       summary: Get all staff members (drivers and conductors)
