@@ -546,3 +546,75 @@ func (r *RoutePermitRepository) CountPermits(busOwnerID string) (int, error) {
 	err := r.db.QueryRow(query, busOwnerID).Scan(&count)
 	return count, err
 }
+
+// GetPermitsExpiringInDays retrieves active permits that expire in exactly `days` days
+func (r *RoutePermitRepository) GetPermitsExpiringInDays(days int) ([]models.RoutePermit, error) {
+	query := `
+		SELECT
+			id, bus_owner_id, permit_number, bus_registration_number,
+			master_route_id, issue_date, expiry_date, permit_type,
+			approved_fare, status, created_at, updated_at
+		FROM route_permits
+		WHERE (status = 'approved' OR status = 'verified')
+		  AND (expiry_date::date - CURRENT_DATE) = $1
+	`
+	rows, err := r.db.Query(query, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var permits []models.RoutePermit
+	for rows.Next() {
+		var p models.RoutePermit
+		if err := rows.Scan(
+			&p.ID, &p.BusOwnerID, &p.PermitNumber, &p.BusRegistrationNumber,
+			&p.MasterRouteID, &p.IssueDate, &p.ExpiryDate, &p.PermitType,
+			&p.ApprovedFare, &p.Status, &p.CreatedAt, &p.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		permits = append(permits, p)
+	}
+	return permits, nil
+}
+
+// UpdateVerificationStatus updates a permit's status and records verified_at if approved
+func (r *RoutePermitRepository) UpdateVerificationStatus(permitID string, status models.VerificationStatus, rejectionReason *string) error {
+	if status == models.VerificationVerified {
+		query := `UPDATE route_permits SET status = $1, verified_at = NOW(), updated_at = NOW() WHERE id = $2`
+		res, err := r.db.Exec(query, status, permitID)
+		if err != nil {
+			return err
+		}
+		rows, _ := res.RowsAffected()
+		if rows == 0 {
+			return sql.ErrNoRows
+		}
+		return nil
+	} else if status == models.VerificationRejected {
+		query := `UPDATE route_permits SET status = $1, restrictions = COALESCE($2, restrictions), updated_at = NOW() WHERE id = $3`
+		res, err := r.db.Exec(query, status, rejectionReason, permitID)
+		if err != nil {
+			return err
+		}
+		rows, _ := res.RowsAffected()
+		if rows == 0 {
+			return sql.ErrNoRows
+		}
+		return nil
+	}
+
+	query := `UPDATE route_permits SET status = $1, updated_at = NOW() WHERE id = $2`
+	res, err := r.db.Exec(query, status, permitID)
+	if err != nil {
+		return err
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+

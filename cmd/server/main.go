@@ -262,6 +262,22 @@ func main() {
 	busOwnerRouteRepo := database.NewBusOwnerRouteRepository(db)
 	busOwnerRouteHandler := handlers.NewBusOwnerRouteHandler(busOwnerRouteRepo, ownerRepository)
 
+	// Initialize bus owner notification system
+	logger.Info("🔔 Initializing Bus Owner Notification system...")
+	busOwnerNotificationRepo := database.NewBusOwnerNotificationRepository(db)
+	busOwnerNotificationService := services.NewBusOwnerNotificationService(
+		busOwnerNotificationRepo,
+		permitRepository,
+		ownerRepository,
+		userSessionRepository,
+		oneSignalService,
+	)
+	busOwnerNotificationHandler := handlers.NewBusOwnerNotificationHandler(
+		busOwnerNotificationRepo,
+		ownerRepository,
+	)
+	logger.Info("✓ Bus Owner Notification system initialized")
+
 	// Initialize lounge owner, lounge, staff, lounge driver, lounge transport location, lounge tranport location price and admin handlers
 	logger.Info("🔍 DEBUG: Initializing lounge handlers...")
 	loungeOwnerHandler := handlers.NewLoungeOwnerHandler(loungeOwnerRepository, userRepository, loungeRepository) //added lounge repository new
@@ -452,10 +468,19 @@ func main() {
 	walletHandler := handlers.NewWalletHandler(walletService)
 	logger.Info("✓ Wallet & Settlement system initialized")
 
+	// Connect Notification triggers across system
+	permitHandler.SetNotificationService(busOwnerNotificationService)
+	activeTripService.SetNotificationService(busOwnerNotificationService, tripSeatRepo)
+	walletService.SetNotificationService(busOwnerNotificationService, ownerRepository)
+
 	// Start background job for intent expiration
 	intentExpirationService := services.NewIntentExpirationService(bookingIntentRepo, logger)
 	intentExpirationService.Start()
 	defer intentExpirationService.Stop()
+
+	// Start background worker for permit expiry notifications (checks once every 24 hours)
+	busOwnerNotificationService.StartExpiryScheduler(24 * time.Hour)
+	defer busOwnerNotificationService.StopExpiryScheduler()
 
 	// Start background worker for trip generation (maintains rolling window for indefinite schedules)
 	//tripGeneratorSvc.StartBackgroundWorker(6 * time.Hour)
@@ -1015,7 +1040,30 @@ func main() {
 			permits.POST("", middleware.RequireVerifiedBusOwner(ownerRepository), permitHandler.CreatePermit)
 			permits.PUT("/:id", middleware.RequireVerifiedBusOwner(ownerRepository), permitHandler.UpdatePermit)
 			permits.DELETE("/:id", middleware.RequireVerifiedBusOwner(ownerRepository), permitHandler.DeletePermit)
+			permits.POST("/:id/status", permitHandler.UpdatePermitStatus)
+			permits.PATCH("/:id/status", permitHandler.UpdatePermitStatus)
 		}
+
+		// Bus Owner Notification routes (all protected)
+		logger.Info("🔔 Registering Bus Owner Notification routes...")
+		notifications := v1.Group("/notifications")
+		notifications.Use(middleware.AuthMiddleware(jwtService))
+		{
+			notifications.GET("", busOwnerNotificationHandler.GetNotifications)
+			notifications.GET("/unread-count", busOwnerNotificationHandler.GetUnreadCount)
+			notifications.PATCH("/:id/read", busOwnerNotificationHandler.MarkAsRead)
+			notifications.PATCH("/read-all", busOwnerNotificationHandler.MarkAllAsRead)
+		}
+
+		busOwnerNotifications := v1.Group("/bus-owner/notifications")
+		busOwnerNotifications.Use(middleware.AuthMiddleware(jwtService))
+		{
+			busOwnerNotifications.GET("", busOwnerNotificationHandler.GetNotifications)
+			busOwnerNotifications.GET("/unread-count", busOwnerNotificationHandler.GetUnreadCount)
+			busOwnerNotifications.PATCH("/:id/read", busOwnerNotificationHandler.MarkAsRead)
+			busOwnerNotifications.PATCH("/read-all", busOwnerNotificationHandler.MarkAllAsRead)
+		}
+		logger.Info("🔔 Bus Owner Notification routes registered successfully")
 
 		// Master Routes (all protected - for dropdown selection)
 		masterRoutes := v1.Group("/master-routes")
@@ -1352,6 +1400,10 @@ func main() {
 		mobile.POST("/settlements/special-request", walletHandler.RequestSpecialPayout)
 		mobile.GET("/settlements/payout-frequency/status", walletHandler.GetPayoutFrequencyStatus)
 		mobile.POST("/settlements/payout-frequency/request", walletHandler.RequestPayoutFrequencyChange)
+		mobile.GET("/notifications", busOwnerNotificationHandler.GetNotifications)
+		mobile.GET("/notifications/unread-count", busOwnerNotificationHandler.GetUnreadCount)
+		mobile.PATCH("/notifications/:id/read", busOwnerNotificationHandler.MarkAsRead)
+		mobile.PATCH("/notifications/read-all", busOwnerNotificationHandler.MarkAllAsRead)
 	}
 
 	// Create HTTP server

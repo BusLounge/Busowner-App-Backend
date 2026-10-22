@@ -8,12 +8,14 @@ import (
 	"github.com/smarttransit/sms-auth-backend/internal/database"
 	"github.com/smarttransit/sms-auth-backend/internal/middleware"
 	"github.com/smarttransit/sms-auth-backend/internal/models"
+	"github.com/smarttransit/sms-auth-backend/internal/services"
 )
 
 type PermitHandler struct {
-	permitRepo      *database.RoutePermitRepository
-	busOwnerRepo    *database.BusOwnerRepository
-	masterRouteRepo *database.MasterRouteRepository
+	permitRepo          *database.RoutePermitRepository
+	busOwnerRepo        *database.BusOwnerRepository
+	masterRouteRepo     *database.MasterRouteRepository
+	notificationService *services.BusOwnerNotificationService
 }
 
 func NewPermitHandler(permitRepo *database.RoutePermitRepository, busOwnerRepo *database.BusOwnerRepository, masterRouteRepo *database.MasterRouteRepository) *PermitHandler {
@@ -22,6 +24,11 @@ func NewPermitHandler(permitRepo *database.RoutePermitRepository, busOwnerRepo *
 		busOwnerRepo:    busOwnerRepo,
 		masterRouteRepo: masterRouteRepo,
 	}
+}
+
+// SetNotificationService injects the notification service
+func (h *PermitHandler) SetNotificationService(notificationService *services.BusOwnerNotificationService) {
+	h.notificationService = notificationService
 }
 
 // checkBusOwnerVerified checks if the bus owner is verified and returns 403 if not.
@@ -412,3 +419,74 @@ func (h *PermitHandler) GetRouteDetails(c *gin.Context) {
 
 	c.JSON(http.StatusOK, response)
 }
+
+// UpdatePermitStatusRequest represents the payload for approving or rejecting a permit
+type UpdatePermitStatusRequest struct {
+	Status string `json:"status" binding:"required,oneof=approved verified rejected pending"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// UpdatePermitStatus handles admin/authority verification of a route permit and triggers notifications
+// POST /api/v1/permits/:id/status or PATCH /api/v1/permits/:id/status
+func (h *PermitHandler) UpdatePermitStatus(c *gin.Context) {
+	permitID := c.Param("id")
+	if permitID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Permit ID is required"})
+		return
+	}
+
+	var req UpdatePermitStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	// 1. Get existing permit
+	permit, err := h.permitRepo.GetByID(permitID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Permit not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch permit: " + err.Error()})
+		return
+	}
+
+	// Map status
+	dbStatus := models.VerificationStatus(req.Status)
+	if req.Status == "approved" {
+		dbStatus = models.VerificationVerified
+	}
+
+	// 2. Update status in database
+	var reasonPtr *string
+	if req.Reason != "" {
+		reasonPtr = &req.Reason
+	}
+	err = h.permitRepo.UpdateVerificationStatus(permitID, dbStatus, reasonPtr)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update permit status: " + err.Error()})
+		return
+	}
+
+	// 3. Trigger notification for the bus owner
+	if h.notificationService != nil {
+		go func() {
+			_ = h.notificationService.NotifyPermitStatus(
+				permit.BusOwnerID,
+				permit.ID,
+				permit.PermitNumber,
+				permit.BusRegistrationNumber,
+				req.Status,
+				req.Reason,
+			)
+		}()
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":   "Permit status updated successfully",
+		"permit_id": permitID,
+		"status":    req.Status,
+	})
+}
+
