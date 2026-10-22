@@ -16,6 +16,8 @@ type ActiveTripService struct {
 	staffRepo         *database.BusStaffRepository
 	busRepo           *database.BusRepository
 	permitRepo        *database.RoutePermitRepository
+	seatRepo          *database.TripSeatRepository
+	notificationSvc   *BusOwnerNotificationService
 }
 
 // NewActiveTripService creates a new ActiveTripService
@@ -33,6 +35,12 @@ func NewActiveTripService(
 		busRepo:           busRepo,
 		permitRepo:        permitRepo,
 	}
+}
+
+// SetNotificationService injects notification service and seat repo for trip completion alerts
+func (s *ActiveTripService) SetNotificationService(notificationSvc *BusOwnerNotificationService, seatRepo *database.TripSeatRepository) {
+	s.notificationSvc = notificationSvc
+	s.seatRepo = seatRepo
 }
 
 // StartTripInput contains the data needed to start a trip
@@ -274,8 +282,12 @@ func (s *ActiveTripService) EndTrip(input *EndTripInput) (*EndTripResult, error)
 	// 7. Update scheduled trip status to completed
 	err = s.scheduledTripRepo.UpdateStatus(activeTrip.ScheduledTripID, "completed")
 	if err != nil {
-		// Log but don't fail
-		// TODO: Add proper logging
+		log.Printf("WARNING: Failed to update scheduled trip status to completed: %v", err)
+	}
+
+	// 8. Trigger notification for bus owner
+	if s.notificationSvc != nil {
+		go s.dispatchTripCompletedNotification(activeTrip.ScheduledTripID)
 	}
 
 	return &EndTripResult{
@@ -283,6 +295,38 @@ func (s *ActiveTripService) EndTrip(input *EndTripInput) (*EndTripResult, error)
 		Message:    "Trip completed successfully",
 		Duration:   activeTrip.GetTripDuration().String(),
 	}, nil
+}
+
+func (s *ActiveTripService) dispatchTripCompletedNotification(scheduledTripID string) {
+	trip, err := s.scheduledTripRepo.GetByID(scheduledTripID)
+	if err != nil || trip == nil || trip.PermitID == nil {
+		return
+	}
+
+	permit, err := s.permitRepo.GetByID(*trip.PermitID)
+	if err != nil || permit == nil {
+		return
+	}
+
+	passengerCount := 0
+	totalRevenue := 0.0
+
+	if s.seatRepo != nil {
+		summary, err := s.seatRepo.GetSummary(scheduledTripID)
+		if err == nil && summary != nil {
+			passengerCount = summary.BookedSeats
+			totalRevenue = float64(summary.BookedSeats) * trip.BaseFare
+		}
+	}
+
+	_ = s.notificationSvc.NotifyTripCompleted(
+		permit.BusOwnerID,
+		scheduledTripID,
+		permit.FullOriginCity,
+		permit.FullDestinationCity,
+		passengerCount,
+		totalRevenue,
+	)
 }
 
 // GetActiveTrip retrieves an active trip by ID

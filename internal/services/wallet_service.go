@@ -13,9 +13,11 @@ import (
 
 // WalletService coordinates wallet operations and PayHere payouts
 type WalletService struct {
-	walletRepo    *database.WalletRepository
-	payhereClient *payhere.Client
-	logger        *logrus.Logger
+	walletRepo          *database.WalletRepository
+	payhereClient       *payhere.Client
+	logger              *logrus.Logger
+	notificationService *BusOwnerNotificationService
+	busOwnerRepo        *database.BusOwnerRepository
 }
 
 // NewWalletService creates a new wallet service
@@ -28,6 +30,12 @@ func NewWalletService(repo *database.WalletRepository, payhereClient *payhere.Cl
 		payhereClient: payhereClient,
 		logger:        logger,
 	}
+}
+
+// SetNotificationService injects notification service and bus owner repo
+func (s *WalletService) SetNotificationService(notificationService *BusOwnerNotificationService, busOwnerRepo *database.BusOwnerRepository) {
+	s.notificationService = notificationService
+	s.busOwnerRepo = busOwnerRepo
 }
 
 // GetWalletStatus returns current balance and payout tracker status
@@ -105,6 +113,26 @@ func (s *WalletService) Withdraw(ctx context.Context, userID string, req *models
 	if err != nil {
 		s.logger.WithError(err).Error("Database deduction failed after gateway approval")
 		return nil, err
+	}
+
+	// 3. Trigger Payout Settlement Notification for the bus owner
+	if s.notificationService != nil && s.busOwnerRepo != nil {
+		go func() {
+			owner, err := s.busOwnerRepo.GetByUserID(userID)
+			if err == nil && owner != nil {
+				accountEnding := req.AccountNumber
+				if len(accountEnding) > 4 {
+					accountEnding = accountEnding[len(accountEnding)-4:]
+				}
+				_ = s.notificationService.NotifyPayoutSettlement(
+					owner.ID,
+					req.Amount,
+					req.BankName,
+					accountEnding,
+					payoutRes.GatewayReference,
+				)
+			}
+		}()
 	}
 
 	res.Message = fmt.Sprintf("Withdrawal of LKR %.2f processed successfully via PayHere (%s)", req.Amount, payoutRes.GatewayReference)
