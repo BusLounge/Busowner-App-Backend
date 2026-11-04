@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/smarttransit/sms-auth-backend/internal/database"
 	"github.com/smarttransit/sms-auth-backend/internal/middleware"
 	"github.com/smarttransit/sms-auth-backend/internal/models"
@@ -118,13 +119,22 @@ func (h *BusOwnerNotificationHandler) MarkAsRead(c *gin.Context) {
 
 	busOwner, err := h.busOwnerRepo.GetByUserID(userCtx.UserID.String())
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Bus owner profile not found"})
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Bus owner profile not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch profile"})
 		return
 	}
 
 	notificationID := c.Param("id")
 	if notificationID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Notification ID is required"})
+		return
+	}
+
+	if _, err := uuid.Parse(notificationID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid notification ID format"})
 		return
 	}
 
@@ -151,7 +161,11 @@ func (h *BusOwnerNotificationHandler) MarkAllAsRead(c *gin.Context) {
 
 	busOwner, err := h.busOwnerRepo.GetByUserID(userCtx.UserID.String())
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Bus owner profile not found"})
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Bus owner profile not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch profile"})
 		return
 	}
 

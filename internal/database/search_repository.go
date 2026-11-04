@@ -188,7 +188,7 @@ func (r *SearchRepository) FindDirectTrips(
 			COALESCE(st.estimated_duration_minutes, 0) as duration_minutes,
 			-- Available seats removed - will be calculated from separate booking table
 			COALESCE(bslt.total_seats, 0) as total_seats,
-			COALESCE(rp.approved_fare, st.base_fare, 0) as fare,
+			COALESCE(NULLIF(st.base_fare, 0), rp.approved_fare, 0) as fare,
 			from_stop.stop_name as boarding_point,
 			to_stop.stop_name as dropping_point,
 			COALESCE(b.has_wifi, false) as has_wifi,

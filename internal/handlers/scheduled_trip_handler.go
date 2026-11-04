@@ -378,6 +378,32 @@ func (h *ScheduledTripHandler) UpdateTrip(c *gin.Context) {
 		}
 	}
 
+	// Check if base fare is being changed
+	baseFareChanged := req.BaseFare != nil && *req.BaseFare != trip.BaseFare
+
+	// Rule 1: Prevent changing base fare on a published trip
+	if trip.IsBookable && baseFareChanged {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Cannot change base fare on a published trip. Please unpublish the trip first to change fare.",
+		})
+		return
+	}
+
+	// Rule 2: Prevent changing base fare if bookings already exist
+	if baseFareChanged {
+		hasBookings, err := h.tripSeatRepo.HasBookedSeats(trip.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check existing bookings for trip", "details": err.Error()})
+			return
+		}
+		if hasBookings {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Cannot change base fare: passengers have already booked seats on this trip.",
+			})
+			return
+		}
+	}
+
 	// VALIDATION: If updating bus_owner_route_id, validate it matches master route and direction
 	if req.BusOwnerRouteID != nil {
 		if trip.TripScheduleID == nil {
@@ -550,6 +576,16 @@ func (h *ScheduledTripHandler) UpdateTrip(c *gin.Context) {
 	if err := h.tripRepo.Update(trip); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update trip", "details": err.Error()})
 		return
+	}
+
+	// If base fare was changed on unpublished trip with 0 bookings, cascade update to trip_seats
+	if baseFareChanged {
+		updatedCount, err := h.tripSeatRepo.UpdateAvailableSeatPrices(trip.ID, trip.BaseFare)
+		if err != nil {
+			log.Printf("UpdateTrip: Warning: Failed to update available seat prices for trip %s: %v", trip.ID, err)
+		} else {
+			log.Printf("UpdateTrip: Successfully updated prices for %d available seats for trip %s to %.2f", updatedCount, trip.ID, trip.BaseFare)
+		}
 	}
 
 	c.JSON(http.StatusOK, trip)

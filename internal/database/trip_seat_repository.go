@@ -393,3 +393,28 @@ func (r *TripSeatRepository) GetAvailableSeats(scheduledTripID string) ([]models
 
 	return seats, nil
 }
+
+// HasBookedSeats checks if any seats have already been booked for a scheduled trip
+func (r *TripSeatRepository) HasBookedSeats(scheduledTripID string) (bool, error) {
+	var count int
+	err := r.db.Get(&count, `SELECT COUNT(*) FROM trip_seats WHERE scheduled_trip_id = $1 AND status = 'booked'`, scheduledTripID)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// UpdateAvailableSeatPrices updates the price of all available (unbooked) seats for a scheduled trip
+func (r *TripSeatRepository) UpdateAvailableSeatPrices(scheduledTripID string, newPrice float64) (int, error) {
+	query := `
+		UPDATE trip_seats
+		SET seat_price = $1, updated_at = NOW()
+		WHERE scheduled_trip_id = $2 AND status = 'available'
+	`
+	result, err := r.db.Exec(query, newPrice, scheduledTripID)
+	if err != nil {
+		return 0, err
+	}
+	rowsAffected, _ := result.RowsAffected()
+	return int(rowsAffected), nil
+}
