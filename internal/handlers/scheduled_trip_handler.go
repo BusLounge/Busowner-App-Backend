@@ -1007,6 +1007,15 @@ func (h *ScheduledTripHandler) PublishTrip(c *gin.Context) {
 		return
 	}
 
+	// Check if permit is assigned
+	if trip.PermitID == nil || *trip.PermitID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Permit required",
+			"message": "Please assign a route permit to this trip before publishing for booking",
+		})
+		return
+	}
+
 	// Check if driver and conductor are assigned
 	if trip.AssignedDriverID == nil || *trip.AssignedDriverID == "" || trip.AssignedConductorID == nil || *trip.AssignedConductorID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -1050,6 +1059,13 @@ func (h *ScheduledTripHandler) PublishTrip(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "Seat layout required",
 				"message": "Please assign a seat layout to this trip before publishing for booking",
+			})
+			return
+		}
+		if err.Error() == "cannot publish trip: permit must be assigned before publishing" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "Permit required",
+				"message": "Please assign a route permit to this trip before publishing for booking",
 			})
 			return
 		}
@@ -1166,12 +1182,12 @@ func (h *ScheduledTripHandler) BulkPublishTrips(c *gin.Context) {
 		log.Printf("Bulk publish: Failed to publish trips for bus owner %s: %v (Trip IDs: %v)",
 			busOwner.ID, err, req.TripIDs)
 
-		// Check if error is about missing seat layouts
+		// Check if error is about missing requirements
 		errMsg := err.Error()
 		if len(errMsg) > 14 && errMsg[:14] == "cannot publish" {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":   "Requirements not met",
-				"message": "All trips must have a seat layout, driver, and conductor assigned before publishing for booking",
+				"message": "All trips must have a seat layout, route permit, driver, and conductor assigned before publishing for booking",
 				"details": errMsg,
 			})
 			return
@@ -1371,10 +1387,14 @@ func (h *ScheduledTripHandler) AssignStaffAndPermit(c *gin.Context) {
 		return
 	}
 
-	// Prevent removing staff from a published trip
+	// Prevent removing staff or permit from a published trip
 	if trip.IsBookable {
 		if (req.DriverID != nil && *req.DriverID == "") || (req.ConductorID != nil && *req.ConductorID == "") {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot remove staff from a published trip. Please unpublish the trip first."})
+			return
+		}
+		if req.PermitID != nil && *req.PermitID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot remove permit from a published trip. Please unpublish the trip first."})
 			return
 		}
 	}

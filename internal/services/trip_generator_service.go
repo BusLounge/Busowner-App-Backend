@@ -181,7 +181,7 @@ func (s *TripGeneratorService) GenerateTripsForSchedule(schedule *models.TripSch
 				AssignedDriverID:         assignedDriverID,
 				AssignedConductorID:      assignedConductorID,
 				SeatLayoutID:             seatLayoutID,                               // Use bus's seat layout if available
-				IsBookable:               schedule.IsBookable && seatLayoutID != nil && assignedDriverID != nil && assignedConductorID != nil, // Only bookable if we have a seat layout, driver, and conductor
+				IsBookable:               schedule.IsBookable && seatLayoutID != nil && assignedDriverID != nil && assignedConductorID != nil && schedule.PermitID != nil, // Only bookable if we have a seat layout, driver, conductor, and permit
 				BaseFare:                 schedule.BaseFare,
 				AssignmentDeadline:       &assignmentDeadline,
 				Status:                   models.ScheduledTripStatusScheduled,
@@ -368,7 +368,7 @@ func (s *TripGeneratorService) GenerateFutureTrips() (int, error) {
 				AssignedDriverID:         assignedDriverID,
 				AssignedConductorID:      assignedConductorID,
 				SeatLayoutID:             seatLayoutID,                                // Use bus's seat layout if available
-				IsBookable:               timetable.IsBookable && seatLayoutID != nil && assignedDriverID != nil && assignedConductorID != nil, // Only bookable if we have a seat layout, driver, and conductor
+				IsBookable:               timetable.IsBookable && seatLayoutID != nil && assignedDriverID != nil && assignedConductorID != nil && timetable.PermitID != nil, // Only bookable if we have a seat layout, driver, conductor, and permit
 				TotalSeats:               totalSeats,
 				// AvailableSeats and BookedSeats removed - managed in separate booking table
 				BaseFare:            timetable.BaseFare,
