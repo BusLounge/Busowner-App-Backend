@@ -653,29 +653,35 @@ func (r *ScheduledTripRepository) scanTripsWithRouteInfo(rows *sql.Rows) ([]mode
 func (r *ScheduledTripRepository) PublishTrip(tripID string, busOwnerID string) error {
 	log.Printf("PublishTrip: Setting is_bookable=true for trip %s, bus owner %s", tripID, busOwnerID)
 
-	// First, check if trip has seat_layout_id assigned and verify ownership
+	// First, check if trip has seat_layout_id and permit_id assigned and verify ownership
 	// Supports both: trips with trip_schedule (recurring) and trips with bus_owner_route only (special trips)
 	var seatLayoutID sql.NullString
+	var permitID sql.NullString
 	checkQuery := `
-		SELECT st.seat_layout_id
+		SELECT st.seat_layout_id, st.permit_id
 		FROM scheduled_trips st
 		LEFT JOIN trip_schedules ts ON st.trip_schedule_id = ts.id
 		LEFT JOIN bus_owner_routes bor ON st.bus_owner_route_id = bor.id
 		WHERE st.id = $1 
 		  AND (ts.bus_owner_id = $2 OR bor.bus_owner_id = $2)
 	`
-	err := r.db.QueryRow(checkQuery, tripID, busOwnerID).Scan(&seatLayoutID)
+	err := r.db.QueryRow(checkQuery, tripID, busOwnerID).Scan(&seatLayoutID, &permitID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("trip not found or unauthorized")
 		}
-		log.Printf("PublishTrip: Error checking seat layout: %v", err)
+		log.Printf("PublishTrip: Error checking requirements: %v", err)
 		return fmt.Errorf("failed to check trip requirements: %w", err)
 	}
 
-	if !seatLayoutID.Valid {
+	if !seatLayoutID.Valid || seatLayoutID.String == "" {
 		log.Printf("PublishTrip: Cannot publish trip %s - seat_layout_id not assigned", tripID)
 		return fmt.Errorf("cannot publish trip: seat layout must be assigned before publishing")
+	}
+
+	if !permitID.Valid || permitID.String == "" {
+		log.Printf("PublishTrip: Cannot publish trip %s - permit_id not assigned", tripID)
+		return fmt.Errorf("cannot publish trip: permit must be assigned before publishing")
 	}
 
 	// Update query also needs to support both ownership paths
@@ -758,14 +764,15 @@ func (r *ScheduledTripRepository) BulkPublishTrips(tripIDs []string, busOwnerID 
 	log.Printf("BulkPublishTrips: Attempting to publish %d trips for booking (bus owner %s)", len(tripIDs), busOwnerID)
 	log.Printf("BulkPublishTrips: Trip IDs: %v", tripIDs)
 
-	// First, check if all trips have seat_layout_id, assigned_driver_id, and assigned_conductor_id assigned
+	// First, check if all trips have seat_layout_id, assigned_driver_id, assigned_conductor_id, and permit_id assigned
 	checkQuery := `
 		SELECT st.id
 		FROM scheduled_trips st
-		JOIN trip_schedules ts ON st.trip_schedule_id = ts.id
+		LEFT JOIN trip_schedules ts ON st.trip_schedule_id = ts.id
+		LEFT JOIN bus_owner_routes bor ON st.bus_owner_route_id = bor.id
 		WHERE st.id = ANY($1::text[])
-		  AND ts.bus_owner_id = $2
-		  AND (st.seat_layout_id IS NULL OR st.assigned_driver_id IS NULL OR st.assigned_conductor_id IS NULL)
+		  AND (ts.bus_owner_id = $2 OR bor.bus_owner_id = $2)
+		  AND (st.seat_layout_id IS NULL OR st.assigned_driver_id IS NULL OR st.assigned_conductor_id IS NULL OR st.permit_id IS NULL)
 	`
 	rows, err := r.db.Query(checkQuery, pq.Array(tripIDs), busOwnerID)
 	if err != nil {
@@ -784,18 +791,23 @@ func (r *ScheduledTripRepository) BulkPublishTrips(tripIDs []string, busOwnerID 
 	}
 
 	if len(invalidTrips) > 0 {
-		log.Printf("BulkPublishTrips: %d trips missing seat layout or staff assignments: %v", len(invalidTrips), invalidTrips)
-		return 0, fmt.Errorf("cannot publish %d trip(s) without seat layout, driver, and conductor assigned", len(invalidTrips))
+		log.Printf("BulkPublishTrips: %d trips missing seat layout, staff, or permit assignments: %v", len(invalidTrips), invalidTrips)
+		return 0, fmt.Errorf("cannot publish %d trip(s) without seat layout, driver, conductor, and permit assigned", len(invalidTrips))
 	}
 
 	// Convert string slice to PostgreSQL text array format
 	query := `
 		UPDATE scheduled_trips st
 		SET is_bookable = true, ever_published = true, updated_at = NOW()
-		FROM trip_schedules ts
-		WHERE st.id = ANY($1::text[])
-		  AND st.trip_schedule_id = ts.id
-		  AND ts.bus_owner_id = $2
+		FROM (
+			SELECT st2.id
+			FROM scheduled_trips st2
+			LEFT JOIN trip_schedules ts ON st2.trip_schedule_id = ts.id
+			LEFT JOIN bus_owner_routes bor ON st2.bus_owner_route_id = bor.id
+			WHERE st2.id = ANY($1::text[])
+			  AND (ts.bus_owner_id = $2 OR bor.bus_owner_id = $2)
+		) AS authorized
+		WHERE st.id = authorized.id
 	`
 
 	result, err := r.db.Exec(query, pq.Array(tripIDs), busOwnerID)
@@ -827,10 +839,15 @@ func (r *ScheduledTripRepository) BulkUnpublishTrips(tripIDs []string, busOwnerI
 	query := `
 		UPDATE scheduled_trips st
 		SET is_bookable = false, updated_at = NOW()
-		FROM trip_schedules ts
-		WHERE st.id = ANY($1::text[])
-		  AND st.trip_schedule_id = ts.id
-		  AND ts.bus_owner_id = $2
+		FROM (
+			SELECT st2.id
+			FROM scheduled_trips st2
+			LEFT JOIN trip_schedules ts ON st2.trip_schedule_id = ts.id
+			LEFT JOIN bus_owner_routes bor ON st2.bus_owner_route_id = bor.id
+			WHERE st2.id = ANY($1::text[])
+			  AND (ts.bus_owner_id = $2 OR bor.bus_owner_id = $2)
+		) AS authorized
+		WHERE st.id = authorized.id
 	`
 
 	result, err := r.db.Exec(query, pq.Array(tripIDs), busOwnerID)
