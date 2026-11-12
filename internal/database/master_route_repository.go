@@ -2,6 +2,8 @@ package database
 
 import (
 	"database/sql"
+	"regexp"
+	"strings"
 
 	"github.com/smarttransit/sms-auth-backend/internal/models"
 )
@@ -242,6 +244,43 @@ func (r *MasterRouteRepository) GetStopByID(stopID string) (*models.MasterRouteS
 	return stop, nil
 }
 
+// extractBaseRouteNumber extracts the route code without direction suffix.
+// Examples:
+// "17 kan-pana" -> "17"
+// "17 panadu-kan" -> "17"
+// "1/col-kandy" -> "1"
+// "1/kandy-col" -> "1"
+// "EX - 03/kandy-mahara" -> "ex03"
+func extractBaseRouteNumber(routeNum string) string {
+	s := strings.TrimSpace(routeNum)
+	if idx := strings.Index(s, "/"); idx != -1 {
+		prefix := strings.TrimSpace(s[:idx])
+		if prefix != "" {
+			return cleanRouteNumber(prefix)
+		}
+	}
+	parts := strings.Fields(s)
+	if len(parts) >= 2 {
+		return cleanRouteNumber(parts[0])
+	}
+	return cleanRouteNumber(s)
+}
+
+func cleanRouteNumber(s string) string {
+	reg := regexp.MustCompile(`[^a-zA-Z0-9-]`)
+	return strings.ToLower(reg.ReplaceAllString(s, ""))
+}
+
+func extractVia(routeName string) string {
+	reg := regexp.MustCompile(`(?i)\(via\s+([^)]+)\)`)
+	matches := reg.FindStringSubmatch(routeName)
+	if len(matches) > 1 {
+		clean := regexp.MustCompile(`[^a-zA-Z0-9]`)
+		return strings.ToLower(clean.ReplaceAllString(matches[1], ""))
+	}
+	return ""
+}
+
 // AreRoutesPaired checks if two master routes are identical or are reverse directions of the same corridor.
 func (r *MasterRouteRepository) AreRoutesPaired(routeID1, routeID2 string) (bool, error) {
 	if routeID1 == "" || routeID2 == "" {
@@ -252,18 +291,54 @@ func (r *MasterRouteRepository) AreRoutesPaired(routeID1, routeID2 string) (bool
 	}
 
 	query := `
-		SELECT EXISTS (
-			SELECT 1 FROM master_routes r1, master_routes r2
-			WHERE r1.id = $1 AND r2.id = $2
-			  AND r1.route_number = r2.route_number
-			  AND LOWER(TRIM(r1.origin_city)) = LOWER(TRIM(r2.destination_city))
-			  AND LOWER(TRIM(r1.destination_city)) = LOWER(TRIM(r2.origin_city))
-		)
+		SELECT 
+			r1.route_number, r1.origin_city, r1.destination_city, r1.route_name,
+			r2.route_number, r2.origin_city, r2.destination_city, r2.route_name
+		FROM master_routes r1, master_routes r2
+		WHERE r1.id = $1 AND r2.id = $2
 	`
-	var paired bool
-	err := r.db.QueryRow(query, routeID1, routeID2).Scan(&paired)
+	var r1Num, r1Origin, r1Dest, r1Name string
+	var r2Num, r2Origin, r2Dest, r2Name string
+
+	err := r.db.QueryRow(query, routeID1, routeID2).Scan(
+		&r1Num, &r1Origin, &r1Dest, &r1Name,
+		&r2Num, &r2Origin, &r2Dest, &r2Name,
+	)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
 		return false, err
 	}
-	return paired, nil
+
+	o1 := strings.ToLower(strings.TrimSpace(r1Origin))
+	d1 := strings.ToLower(strings.TrimSpace(r1Dest))
+	o2 := strings.ToLower(strings.TrimSpace(r2Origin))
+	d2 := strings.ToLower(strings.TrimSpace(r2Dest))
+
+	// Cities must be swapped
+	if o1 == d2 && d1 == o2 {
+		// If both route names specify a via path (e.g. "(via Puttalam)" vs "(via Kurunegala)"), they must match
+		via1 := extractVia(r1Name)
+		via2 := extractVia(r2Name)
+		if via1 != "" && via2 != "" && via1 != via2 {
+			return false, nil
+		}
+
+		// Exact route number match
+		if strings.EqualFold(strings.TrimSpace(r1Num), strings.TrimSpace(r2Num)) {
+			return true, nil
+		}
+		// Base route number match (e.g. "17 kan-pana" vs "17 panadu-kan")
+		b1 := extractBaseRouteNumber(r1Num)
+		b2 := extractBaseRouteNumber(r2Num)
+		if b1 != "" && b1 == b2 {
+			return true, nil
+		}
+		if b1 == "" || b2 == "" {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
