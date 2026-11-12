@@ -241,3 +241,29 @@ func (r *MasterRouteRepository) GetStopByID(stopID string) (*models.MasterRouteS
 
 	return stop, nil
 }
+
+// AreRoutesPaired checks if two master routes are identical or are reverse directions of the same corridor.
+func (r *MasterRouteRepository) AreRoutesPaired(routeID1, routeID2 string) (bool, error) {
+	if routeID1 == "" || routeID2 == "" {
+		return false, nil
+	}
+	if routeID1 == routeID2 {
+		return true, nil
+	}
+
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM master_routes r1, master_routes r2
+			WHERE r1.id = $1 AND r2.id = $2
+			  AND r1.route_number = r2.route_number
+			  AND LOWER(TRIM(r1.origin_city)) = LOWER(TRIM(r2.destination_city))
+			  AND LOWER(TRIM(r1.destination_city)) = LOWER(TRIM(r2.origin_city))
+		)
+	`
+	var paired bool
+	err := r.db.QueryRow(query, routeID1, routeID2).Scan(&paired)
+	if err != nil {
+		return false, err
+	}
+	return paired, nil
+}

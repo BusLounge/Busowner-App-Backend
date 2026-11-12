@@ -23,7 +23,7 @@ type BusOwnerRoute struct {
 type CreateBusOwnerRouteRequest struct {
 	MasterRouteID   string   `json:"master_route_id" binding:"required"`
 	CustomRouteName string   `json:"custom_route_name" binding:"required"`
-	Direction       string   `json:"direction" binding:"required,oneof=UP DOWN"`
+	Direction       string   `json:"direction" binding:"omitempty,oneof=UP DOWN"`
 	SelectedStopIDs []string `json:"selected_stop_ids" binding:"required,min=2"`
 }
 

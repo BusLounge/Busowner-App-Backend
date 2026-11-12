@@ -14,15 +14,16 @@ import (
 )
 
 type ScheduledTripHandler struct {
-	tripRepo     *database.ScheduledTripRepository
-	scheduleRepo *database.TripScheduleRepository
-	permitRepo   *database.RoutePermitRepository
-	busOwnerRepo *database.BusOwnerRepository
-	routeRepo    *database.BusOwnerRouteRepository
-	busRepo      *database.BusRepository
-	staffRepo    *database.BusStaffRepository
-	settingRepo  *database.SystemSettingRepository
-	tripSeatRepo *database.TripSeatRepository
+	tripRepo        *database.ScheduledTripRepository
+	scheduleRepo    *database.TripScheduleRepository
+	permitRepo      *database.RoutePermitRepository
+	busOwnerRepo    *database.BusOwnerRepository
+	routeRepo       *database.BusOwnerRouteRepository
+	busRepo         *database.BusRepository
+	staffRepo       *database.BusStaffRepository
+	settingRepo     *database.SystemSettingRepository
+	tripSeatRepo    *database.TripSeatRepository
+	masterRouteRepo *database.MasterRouteRepository
 }
 
 func NewScheduledTripHandler(
@@ -35,17 +36,19 @@ func NewScheduledTripHandler(
 	staffRepo *database.BusStaffRepository,
 	settingRepo *database.SystemSettingRepository,
 	tripSeatRepo *database.TripSeatRepository,
+	masterRouteRepo *database.MasterRouteRepository,
 ) *ScheduledTripHandler {
 	return &ScheduledTripHandler{
-		tripRepo:     tripRepo,
-		scheduleRepo: scheduleRepo,
-		permitRepo:   permitRepo,
-		busOwnerRepo: busOwnerRepo,
-		routeRepo:    routeRepo,
-		busRepo:      busRepo,
-		staffRepo:    staffRepo,
-		settingRepo:  settingRepo,
-		tripSeatRepo: tripSeatRepo,
+		tripRepo:        tripRepo,
+		scheduleRepo:    scheduleRepo,
+		permitRepo:      permitRepo,
+		busOwnerRepo:    busOwnerRepo,
+		routeRepo:       routeRepo,
+		busRepo:         busRepo,
+		staffRepo:       staffRepo,
+		settingRepo:     settingRepo,
+		tripSeatRepo:    tripSeatRepo,
+		masterRouteRepo: masterRouteRepo,
 	}
 }
 
@@ -447,17 +450,7 @@ func (h *ScheduledTripHandler) UpdateTrip(c *gin.Context) {
 			return
 		}
 
-		// RULE 2: Must have same direction (UP/DOWN)
-		if scheduleRoute.Direction != newRoute.Direction {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "Route override rejected: new route must have the same direction as the schedule",
-				"details": fmt.Sprintf("Schedule direction: %s, new route direction: %s",
-					scheduleRoute.Direction, newRoute.Direction),
-			})
-			return
-		}
-
-		// RULE 3: If permit is assigned, verify route is valid for permit
+		// RULE 2: If permit is assigned, verify route is valid for permit (supports direct & reverse corridor pair)
 		if trip.PermitID != nil {
 			permit, err := h.permitRepo.GetByID(*trip.PermitID)
 			if err != nil {
@@ -465,9 +458,14 @@ func (h *ScheduledTripHandler) UpdateTrip(c *gin.Context) {
 				return
 			}
 
-			if permit.MasterRouteID != newRoute.MasterRouteID {
+			paired, err := h.masterRouteRepo.AreRoutesPaired(permit.MasterRouteID, newRoute.MasterRouteID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify permit route compatibility"})
+				return
+			}
+			if !paired {
 				c.JSON(http.StatusBadRequest, gin.H{
-					"error":   "Route override rejected: permit is for a different master route",
+					"error":   "Route override rejected: permit is for a different master route corridor",
 					"details": fmt.Sprintf("Permit is for route %s, new route uses %s", permit.MasterRouteID, newRoute.MasterRouteID),
 				})
 				return
@@ -1574,9 +1572,14 @@ func (h *ScheduledTripHandler) AssignStaffAndPermit(c *gin.Context) {
 			return
 		}
 
-		// Verify permit covers this route
-		if permit.MasterRouteID != route.MasterRouteID {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Permit does not cover this route"})
+		// Verify permit covers this route (supports direct & reverse corridor pair)
+		paired, err := h.masterRouteRepo.AreRoutesPaired(permit.MasterRouteID, route.MasterRouteID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify permit route compatibility"})
+			return
+		}
+		if !paired {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Permit does not cover this route corridor"})
 			return
 		}
 	}

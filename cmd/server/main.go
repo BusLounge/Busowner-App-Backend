@@ -382,6 +382,7 @@ func main() {
 		staffRepository,
 		systemSettingRepo,
 		tripSeatRepo,
+		masterRouteRepo,
 	)
 	systemSettingHandler := handlers.NewSystemSettingHandler(systemSettingRepo)
 	logger.Info("Trip scheduling handlers initialized")

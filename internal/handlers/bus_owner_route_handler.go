@@ -53,6 +53,11 @@ func (h *BusOwnerRouteHandler) CreateRoute(c *gin.Context) {
 		return
 	}
 
+	// Default direction to UP if omitted
+	if req.Direction == "" {
+		req.Direction = "UP"
+	}
+
 	// Log the request for debugging
 	log.Printf("🚌 [BUS OWNER ROUTE] CreateRoute - User: %s, MasterRoute: %s, Name: %s, Direction: %s, Stops: %d",
 		userCtx.UserID.String(), req.MasterRouteID, req.CustomRouteName, req.Direction, len(req.SelectedStopIDs))

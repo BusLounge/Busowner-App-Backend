@@ -13,6 +13,7 @@ type TripRouteValidator struct {
 	tripScheduleRepo *database.TripScheduleRepository
 	routeRepo        *database.BusOwnerRouteRepository
 	permitRepo       *database.RoutePermitRepository
+	masterRouteRepo  *database.MasterRouteRepository
 }
 
 // NewTripRouteValidator creates a new validator
@@ -20,20 +21,21 @@ func NewTripRouteValidator(
 	tripScheduleRepo *database.TripScheduleRepository,
 	routeRepo *database.BusOwnerRouteRepository,
 	permitRepo *database.RoutePermitRepository,
+	masterRouteRepo *database.MasterRouteRepository,
 ) *TripRouteValidator {
 	return &TripRouteValidator{
 		tripScheduleRepo: tripScheduleRepo,
 		routeRepo:        routeRepo,
 		permitRepo:       permitRepo,
+		masterRouteRepo:  masterRouteRepo,
 	}
 }
 
 // ValidateRouteUpdate validates if a trip can update its bus_owner_route_id
 // Rules:
 // 1. New route must have the SAME master_route_id as schedule's route
-// 2. New route must have the SAME is_up_direction as schedule's route
-// 3. New route must be valid for the permit (if permit is assigned)
-// 4. Different stop selections are OK (this is the purpose of the override)
+// 2. New route must be valid for the permit (if permit is assigned, supports direct & reverse pair)
+// 3. Different stop selections are OK (this is the purpose of the override)
 func (v *TripRouteValidator) ValidateRouteUpdate(
 	scheduleID string,
 	newRouteID string,
@@ -70,24 +72,26 @@ func (v *TripRouteValidator) ValidateRouteUpdate(
 		)
 	}
 
-	// RULE 2: Must have same direction (UP/DOWN)
-	if scheduleRoute.Direction != newRoute.Direction {
-		return fmt.Errorf(
-			"route override rejected: new route has different direction (schedule: %s, new: %s) - trips cannot reverse direction",
-			scheduleRoute.Direction,
-			newRoute.Direction,
-		)
-	}
-
-	// RULE 3: If permit is assigned, verify route is valid for permit
+	// RULE 2: If permit is assigned, verify route is valid for permit (supports direct & reverse pair)
 	if permitID != nil {
 		permit, err := v.permitRepo.GetByID(*permitID)
 		if err != nil {
 			return fmt.Errorf("failed to get permit: %w", err)
 		}
 
-		// Check if permit's master_route_id matches
-		if permit.MasterRouteID != newRoute.MasterRouteID {
+		if v.masterRouteRepo != nil {
+			paired, err := v.masterRouteRepo.AreRoutesPaired(permit.MasterRouteID, newRoute.MasterRouteID)
+			if err != nil {
+				return fmt.Errorf("failed to verify permit compatibility: %w", err)
+			}
+			if !paired {
+				return fmt.Errorf(
+					"route override rejected: permit is for different master route corridor (permit: %s, new route: %s)",
+					permit.MasterRouteID,
+					newRoute.MasterRouteID,
+				)
+			}
+		} else if permit.MasterRouteID != newRoute.MasterRouteID {
 			return fmt.Errorf(
 				"route override rejected: permit is for different master route (permit: %s, new route: %s)",
 				permit.MasterRouteID,
