@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
 	"github.com/smarttransit/sms-auth-backend/internal/models"
 )
@@ -356,11 +357,12 @@ func (r *ScheduledTripRepository) UpdateStatus(tripID string, status models.Sche
 	return nil
 }
 
-// Cancel cancels a scheduled trip
+// Cancel cancels a scheduled trip (for trips with 0 bookings)
 func (r *ScheduledTripRepository) Cancel(tripID string, reason string) error {
 	query := `
 		UPDATE scheduled_trips
 		SET status = 'cancelled',
+			is_bookable = false,
 			cancellation_reason = $2,
 			cancelled_at = NOW(),
 			updated_at = NOW()
@@ -382,6 +384,173 @@ func (r *ScheduledTripRepository) Cancel(tripID string, reason string) error {
 	}
 
 	return nil
+}
+
+// EmergencyCancelResult contains stats and passenger notification targets from an emergency cancellation
+type EmergencyCancelResult struct {
+	TripID                 string    `json:"trip_id"`
+	CancelledBookingsCount int       `json:"cancelled_bookings_count"`
+	ManualBookingsCount    int       `json:"manual_bookings_count"`
+	PlayerIDs              []string  `json:"player_ids"`
+	PassengerPhones        []string  `json:"passenger_phones"`
+	DepartureDatetime      time.Time `json:"departure_datetime"`
+	RouteName              string    `json:"route_name"`
+}
+
+// EmergencyCancelTrip atomically cancels a scheduled trip, cancels all active bookings (marking paid ones as refund_pending),
+// cancels trip seats, and returns passenger notification targets.
+func (r *ScheduledTripRepository) EmergencyCancelTrip(tripID string, busOwnerID string, category, reason string) (*EmergencyCancelResult, error) {
+	txer, ok := r.db.(interface {
+		Beginx() (*sqlx.Tx, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("database does not support sqlx transactions")
+	}
+	tx, err := txer.Beginx()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 1. Verify ownership and get trip details
+	var tripInfo struct {
+		ID                string    `db:"id"`
+		DepartureDatetime time.Time `db:"departure_datetime"`
+		RouteName         string    `db:"route_name"`
+	}
+	verifyQuery := `
+		SELECT st.id, st.departure_datetime, 
+		       COALESCE(bor.custom_route_name, mr.route_name, 'Unknown Route') as route_name
+		FROM scheduled_trips st
+		LEFT JOIN trip_schedules ts ON st.trip_schedule_id = ts.id
+		LEFT JOIN bus_owner_routes bor ON COALESCE(st.bus_owner_route_id, ts.bus_owner_route_id) = bor.id
+		LEFT JOIN master_routes mr ON bor.master_route_id = mr.id
+		LEFT JOIN route_permits rp ON st.permit_id = rp.id
+		WHERE st.id = $1 
+		  AND (ts.bus_owner_id = $2 OR bor.bus_owner_id = $2 OR rp.bus_owner_id = $2)
+	`
+	err = tx.Get(&tripInfo, verifyQuery, tripID, busOwnerID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("trip not found or unauthorized")
+		}
+		return nil, fmt.Errorf("failed to verify trip ownership: %w", err)
+	}
+
+	fullReason := fmt.Sprintf("[%s] %s", category, reason)
+
+	// 2. Update scheduled_trips
+	updateTripQuery := `
+		UPDATE scheduled_trips
+		SET status = 'cancelled',
+		    is_bookable = false,
+		    cancellation_reason = $1,
+		    cancelled_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $2 AND status NOT IN ('cancelled', 'completed')
+	`
+	tripRes, err := tx.Exec(updateTripQuery, fullReason, tripID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to cancel scheduled trip: %w", err)
+	}
+	rowsAffected, _ := tripRes.RowsAffected()
+	if rowsAffected == 0 {
+		return nil, fmt.Errorf("trip cannot be cancelled in its current status")
+	}
+
+	// 3. Update bookings: set booking_status to 'cancelled', payment_status to 'refund_pending' (if paid)
+	updateBookingsQuery := `
+		UPDATE bookings
+		SET booking_status = 'cancelled',
+		    payment_status = CASE WHEN payment_status = 'paid' THEN 'refund_pending' ELSE payment_status END,
+		    cancellation_reason = $1,
+		    cancelled_at = NOW(),
+		    updated_at = NOW()
+		WHERE id IN (
+		    SELECT bb.booking_id FROM bus_bookings bb WHERE bb.scheduled_trip_id = $2
+		) AND booking_status NOT IN ('cancelled', 'completed')
+	`
+	bookingsRes, err := tx.Exec(updateBookingsQuery, fullReason, tripID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to cancel passenger bookings: %w", err)
+	}
+	cancelledBookingsCount, _ := bookingsRes.RowsAffected()
+
+	// 4. Update bus_bookings
+	updateBusBookingsQuery := `
+		UPDATE bus_bookings
+		SET status = 'cancelled',
+		    cancelled_at = NOW()
+		WHERE scheduled_trip_id = $1 AND status NOT IN ('cancelled', 'completed')
+	`
+	_, err = tx.Exec(updateBusBookingsQuery, tripID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to cancel bus bookings: %w", err)
+	}
+
+	// 5. Update manual_seat_bookings
+	updateManualBookingsQuery := `
+		UPDATE manual_seat_bookings
+		SET status = 'cancelled',
+		    cancellation_reason = $1,
+		    cancelled_at = NOW(),
+		    updated_at = NOW()
+		WHERE scheduled_trip_id = $2 AND status NOT IN ('cancelled', 'completed')
+	`
+	manualRes, err := tx.Exec(updateManualBookingsQuery, fullReason, tripID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to cancel manual bookings: %w", err)
+	}
+	cancelledManualCount, _ := manualRes.RowsAffected()
+
+	// 6. Release/Cancel trip_seats
+	updateSeatsQuery := `
+		UPDATE trip_seats
+		SET status = 'cancelled',
+		    updated_at = NOW()
+		WHERE scheduled_trip_id = $1
+	`
+	_, err = tx.Exec(updateSeatsQuery, tripID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update trip seats: %w", err)
+	}
+
+	// 7. Collect passenger notification targets (player IDs from user_sessions)
+	fetchPlayerIDsQuery := `
+		SELECT DISTINCT COALESCE(NULLIF(us.onesignal_player_id, ''), NULLIF(us.fcm_token, '')) as player_id
+		FROM user_sessions us
+		JOIN bookings b ON b.user_id = us.user_id
+		JOIN bus_bookings bb ON bb.booking_id = b.id
+		WHERE bb.scheduled_trip_id = $1
+		  AND ((us.onesignal_player_id IS NOT NULL AND us.onesignal_player_id != '') OR (us.fcm_token IS NOT NULL AND us.fcm_token != ''))
+		  AND us.is_active = true
+	`
+	var playerIDs []string
+	_ = tx.Select(&playerIDs, fetchPlayerIDsQuery, tripID)
+
+	// Fetch passenger phone numbers
+	fetchPhonesQuery := `
+		SELECT DISTINCT b.passenger_phone
+		FROM bookings b
+		JOIN bus_bookings bb ON bb.booking_id = b.id
+		WHERE bb.scheduled_trip_id = $1 AND b.passenger_phone IS NOT NULL AND b.passenger_phone != ''
+	`
+	var phones []string
+	_ = tx.Select(&phones, fetchPhonesQuery, tripID)
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return &EmergencyCancelResult{
+		TripID:                 tripID,
+		CancelledBookingsCount: int(cancelledBookingsCount),
+		ManualBookingsCount:    int(cancelledManualCount),
+		PlayerIDs:              playerIDs,
+		PassengerPhones:        phones,
+		DepartureDatetime:      tripInfo.DepartureDatetime,
+		RouteName:              tripInfo.RouteName,
+	}, nil
 }
 
 // scanTrip scans a single trip

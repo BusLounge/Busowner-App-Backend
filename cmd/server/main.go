@@ -384,6 +384,7 @@ func main() {
 		tripSeatRepo,
 		masterRouteRepo,
 	)
+	scheduledTripHandler.SetOneSignalService(oneSignalService)
 	systemSettingHandler := handlers.NewSystemSettingHandler(systemSettingRepo)
 	logger.Info("Trip scheduling handlers initialized")
 
@@ -1146,6 +1147,7 @@ func main() {
 			// Write endpoints (requires verification)
 			scheduledTrips.PATCH("/:id", middleware.RequireVerifiedBusOwner(ownerRepository), scheduledTripHandler.UpdateTrip)
 			scheduledTrips.POST("/:id/cancel", middleware.RequireVerifiedBusOwner(ownerRepository), scheduledTripHandler.CancelTrip)
+			scheduledTrips.POST("/:id/emergency-cancel", middleware.RequireVerifiedBusOwner(ownerRepository), scheduledTripHandler.EmergencyCancelTrip)
 
 			// NEW: Publish/Unpublish endpoints (requires verification)
 			scheduledTrips.PUT("/:id/publish", middleware.RequireVerifiedBusOwner(ownerRepository), scheduledTripHandler.PublishTrip)

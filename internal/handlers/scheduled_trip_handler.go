@@ -5,25 +5,32 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/smarttransit/sms-auth-backend/internal/database"
 	"github.com/smarttransit/sms-auth-backend/internal/middleware"
 	"github.com/smarttransit/sms-auth-backend/internal/models"
+	"github.com/smarttransit/sms-auth-backend/pkg/onesignal"
 )
 
 type ScheduledTripHandler struct {
-	tripRepo        *database.ScheduledTripRepository
-	scheduleRepo    *database.TripScheduleRepository
-	permitRepo      *database.RoutePermitRepository
-	busOwnerRepo    *database.BusOwnerRepository
-	routeRepo       *database.BusOwnerRouteRepository
-	busRepo         *database.BusRepository
-	staffRepo       *database.BusStaffRepository
-	settingRepo     *database.SystemSettingRepository
-	tripSeatRepo    *database.TripSeatRepository
-	masterRouteRepo *database.MasterRouteRepository
+	tripRepo         *database.ScheduledTripRepository
+	scheduleRepo     *database.TripScheduleRepository
+	permitRepo       *database.RoutePermitRepository
+	busOwnerRepo     *database.BusOwnerRepository
+	routeRepo        *database.BusOwnerRouteRepository
+	busRepo          *database.BusRepository
+	staffRepo        *database.BusStaffRepository
+	settingRepo      *database.SystemSettingRepository
+	tripSeatRepo     *database.TripSeatRepository
+	masterRouteRepo  *database.MasterRouteRepository
+	oneSignalService *onesignal.OneSignalService
+}
+
+func (h *ScheduledTripHandler) SetOneSignalService(service *onesignal.OneSignalService) {
+	h.oneSignalService = service
 }
 
 func NewScheduledTripHandler(
@@ -589,7 +596,7 @@ func (h *ScheduledTripHandler) UpdateTrip(c *gin.Context) {
 	c.JSON(http.StatusOK, trip)
 }
 
-// CancelTrip cancels a scheduled trip
+// CancelTrip cancels a scheduled trip with 0 active bookings (Tier 1: Normal Cancellation)
 // POST /api/v1/scheduled-trips/:id/cancel
 func (h *ScheduledTripHandler) CancelTrip(c *gin.Context) {
 	userCtx, exists := middleware.GetUserContext(c)
@@ -625,25 +632,52 @@ func (h *ScheduledTripHandler) CancelTrip(c *gin.Context) {
 		return
 	}
 
-	// Verify ownership
-	if trip.PermitID == nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Trip has no permit assigned"})
-		return
+	// Verify ownership: check permit, schedule, or route
+	isOwner := false
+	if trip.PermitID != nil {
+		permit, err := h.permitRepo.GetByID(*trip.PermitID)
+		if err == nil && permit.BusOwnerID == busOwner.ID {
+			isOwner = true
+		}
 	}
-	permit, err := h.permitRepo.GetByID(*trip.PermitID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify ownership"})
-		return
+	if !isOwner && trip.TripScheduleID != nil {
+		schedule, err := h.scheduleRepo.GetByID(*trip.TripScheduleID)
+		if err == nil && schedule.BusOwnerID == busOwner.ID {
+			isOwner = true
+		}
 	}
-
-	if permit.BusOwnerID != busOwner.ID {
+	if !isOwner && trip.BusOwnerRouteID != nil {
+		route, err := h.routeRepo.GetByID(*trip.BusOwnerRouteID)
+		if err == nil && route.BusOwnerID == busOwner.ID {
+			isOwner = true
+		}
+	}
+	if !isOwner {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
 		return
 	}
 
-	// Check if trip can be cancelled
-	if !trip.CanBeCancelled() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Trip cannot be cancelled"})
+	if trip.Status == models.ScheduledTripStatusCancelled {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Trip is already cancelled"})
+		return
+	}
+	if trip.Status == models.ScheduledTripStatusCompleted {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Completed trips cannot be cancelled"})
+		return
+	}
+
+	// Check if trip has any booked or reserved seats
+	hasBookings, err := h.tripSeatRepo.HasBookedSeats(tripID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check existing bookings for trip", "details": err.Error()})
+		return
+	}
+	if hasBookings {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Cannot cancel trip with normal cancellation",
+			"code":    "USE_EMERGENCY_CANCEL",
+			"message": "This trip has active passenger bookings. Normal cancellation is blocked to protect passengers. Please use Emergency Cancellation to notify passengers and route refunds to the Admin team.",
+		})
 		return
 	}
 
@@ -661,6 +695,107 @@ func (h *ScheduledTripHandler) CancelTrip(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Trip cancelled successfully"})
+}
+
+// EmergencyCancelTripRequest payload for emergency trip cancellation
+type EmergencyCancelTripRequest struct {
+	Category string `json:"category" binding:"required"`
+	Reason   string `json:"reason" binding:"required"`
+}
+
+// EmergencyCancelTrip handles emergency cancellation of scheduled trips with active bookings (Tier 2)
+// POST /api/v1/scheduled-trips/:id/emergency-cancel
+func (h *ScheduledTripHandler) EmergencyCancelTrip(c *gin.Context) {
+	userCtx, exists := middleware.GetUserContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	busOwner, err := h.busOwnerRepo.GetByUserID(userCtx.UserID.String())
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Bus owner profile not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch profile"})
+		return
+	}
+
+	// Check verification status
+	if h.checkBusOwnerVerified(c, busOwner) {
+		return
+	}
+
+	tripID := c.Param("id")
+	if tripID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Trip ID is required"})
+		return
+	}
+
+	var req EmergencyCancelTripRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body", "details": err.Error()})
+		return
+	}
+
+	req.Category = strings.TrimSpace(req.Category)
+	req.Reason = strings.TrimSpace(req.Reason)
+
+	if req.Category == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cancellation category is required"})
+		return
+	}
+
+	if len(req.Reason) < 10 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Detailed reason notes must be at least 10 characters long"})
+		return
+	}
+
+	result, err := h.tripRepo.EmergencyCancelTrip(tripID, busOwner.ID, req.Category, req.Reason)
+	if err != nil {
+		if strings.Contains(err.Error(), "unauthorized") || strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Trip not found or access denied"})
+			return
+		}
+		if strings.Contains(err.Error(), "cannot be cancelled") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to emergency cancel trip", "details": err.Error()})
+		return
+	}
+
+	// Dispatch passenger push notifications via OneSignal asynchronously
+	if h.oneSignalService != nil && len(result.PlayerIDs) > 0 {
+		go func(playerIDs []string, depTime time.Time, routeName, category, fullReason string) {
+			title := "⚠️ Trip Cancelled: Urgent Notice"
+			body := fmt.Sprintf("Your trip on %s (%s) has been cancelled due to emergency: %s. A full refund has been initiated and will be processed by our admin team.",
+				depTime.Format("Jan 02 at 03:04 PM"), routeName, category)
+			data := map[string]interface{}{
+				"type":               "trip_emergency_cancelled",
+				"trip_id":            tripID,
+				"category":           category,
+				"reason":             fullReason,
+				"departure_datetime": depTime.Format(time.RFC3339),
+				"route_name":         routeName,
+			}
+			resp, sendErr := h.oneSignalService.SendToPlayers(playerIDs, title, body, data)
+			if sendErr != nil {
+				log.Printf("Failed to send OneSignal emergency cancel push to passengers: %v", sendErr)
+			} else {
+				log.Printf("Successfully sent OneSignal emergency cancel push to %d passengers. OneSignal ID: %s", len(playerIDs), resp.ID)
+			}
+		}(result.PlayerIDs, result.DepartureDatetime, result.RouteName, req.Category, req.Reason)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":                   "Trip cancelled under emergency protocol. Passenger bookings have been cancelled and queued for admin refund.",
+		"trip_id":                  result.TripID,
+		"cancelled_bookings_count":  result.CancelledBookingsCount,
+		"manual_bookings_count":     result.ManualBookingsCount,
+		"notified_passengers_count": len(result.PlayerIDs),
+	})
 }
 
 // GetBookableTrips retrieves bookable trips (public endpoint for passengers)

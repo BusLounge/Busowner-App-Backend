@@ -12850,8 +12850,8 @@ paths:
           $ref: '#/components/responses/InternalServerError'
   /api/v1/scheduled-trips/{id}/cancel:
     post:
-      summary: Cancel a scheduled trip
-      description: 'Cancel a scheduled trip. The trip must not have been published yet.'
+      summary: Cancel a scheduled trip (Tier 1: 0 bookings only)
+      description: 'Cancel an active scheduled trip that has zero booked or reserved seats. If the trip has active passenger bookings, this endpoint rejects the request with code USE_EMERGENCY_CANCEL; the owner must use the emergency-cancel endpoint instead.'
       operationId: cancelScheduledTrip
       tags:
       - Scheduled Trips
@@ -12870,8 +12870,6 @@ paths:
           application/json:
             schema:
               type: object
-              required:
-              - reason
               properties:
                 reason:
                   type: string
@@ -12888,13 +12886,100 @@ paths:
                     type: string
                     example: Trip cancelled successfully
         '400':
-          description: Invalid request or trip cannot be cancelled (e.g. already published or status not scheduled/confirmed)
+          description: Invalid request, trip already cancelled/completed, or trip has booked seats (returns code USE_EMERGENCY_CANCEL)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: Cannot cancel trip with normal cancellation
+                  code:
+                    type: string
+                    example: USE_EMERGENCY_CANCEL
+                  message:
+                    type: string
+                    example: This trip has active passenger bookings. Please use Emergency Cancellation.
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/AccountNotVerifiedError'
         '404':
           description: Trip not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/scheduled-trips/{id}/emergency-cancel:
+    post:
+      summary: Emergency cancel a scheduled trip with active bookings (Tier 2)
+      description: "Emergency cancel a scheduled trip that has active passenger bookings due to physical disruptions (vehicle breakdown, road closure, landslides, severe weather). Atomically cancels the trip, marks paid passenger bookings as 'refund_pending' for admin refund processing, releases/cancels seats, and dispatches push notifications to all booked passengers."
+      operationId: emergencyCancelScheduledTrip
+      tags:
+      - Scheduled Trips
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - category
+              - reason
+              properties:
+                category:
+                  type: string
+                  description: Emergency cause category
+                  enum:
+                  - Road Damage / Blockage / Landslide
+                  - Vehicle Breakdown / Bus Damage
+                  - Severe Weather / Route Impassable
+                  - Police / Government Closure
+                  - Other Emergency
+                  example: Road Damage / Blockage / Landslide
+                reason:
+                  type: string
+                  description: Detailed location/incident notes (minimum 10 characters)
+                  example: Severe landslide near Kadugannawa gap. Road closed by police until tomorrow.
+      responses:
+        '200':
+          description: Trip cancelled under emergency protocol
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Trip cancelled under emergency protocol. Passenger bookings have been cancelled and queued for admin refund.
+                  trip_id:
+                    type: string
+                    format: uuid
+                  cancelled_bookings_count:
+                    type: integer
+                    example: 18
+                  manual_bookings_count:
+                    type: integer
+                    example: 2
+                  notified_passengers_count:
+                    type: integer
+                    example: 18
+        '400':
+          description: Invalid request, category missing, reason less than 10 characters, or trip cannot be cancelled
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AccountNotVerifiedError'
+        '404':
+          description: Trip not found or access denied
         '500':
           $ref: '#/components/responses/InternalServerError'
   /api/v1/scheduled-trips/{id}/publish:
