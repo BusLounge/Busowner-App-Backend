@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 	"github.com/smarttransit/sms-auth-backend/internal/models"
 )
 
@@ -394,14 +395,33 @@ func (r *TripSeatRepository) GetAvailableSeats(scheduledTripID string) ([]models
 	return seats, nil
 }
 
-// HasBookedSeats checks if any seats have already been booked for a scheduled trip
+// HasBookedSeats checks if any seats have already been booked or reserved for a scheduled trip
 func (r *TripSeatRepository) HasBookedSeats(scheduledTripID string) (bool, error) {
 	var count int
-	err := r.db.Get(&count, `SELECT COUNT(*) FROM trip_seats WHERE scheduled_trip_id = $1 AND status = 'booked'`, scheduledTripID)
+	err := r.db.Get(&count, `SELECT COUNT(*) FROM trip_seats WHERE scheduled_trip_id = $1 AND status IN ('booked', 'reserved')`, scheduledTripID)
 	if err != nil {
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// GetTripIDsWithBookings returns a list of trip IDs from the provided slice that currently have booked or reserved seats
+func (r *TripSeatRepository) GetTripIDsWithBookings(tripIDs []string) ([]string, error) {
+	if len(tripIDs) == 0 {
+		return []string{}, nil
+	}
+	query := `
+		SELECT DISTINCT scheduled_trip_id 
+		FROM trip_seats 
+		WHERE scheduled_trip_id = ANY($1::text[]) 
+		  AND status IN ('booked', 'reserved')
+	`
+	var bookedTripIDs []string
+	err := r.db.Select(&bookedTripIDs, query, pq.Array(tripIDs))
+	if err != nil {
+		return nil, err
+	}
+	return bookedTripIDs, nil
 }
 
 // UpdateAvailableSeatPrices updates the price of all available (unbooked) seats for a scheduled trip

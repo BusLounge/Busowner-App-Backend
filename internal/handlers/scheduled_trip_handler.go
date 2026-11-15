@@ -1108,13 +1108,36 @@ func (h *ScheduledTripHandler) UnpublishTrip(c *gin.Context) {
 		return
 	}
 
+	// Check if trip has any booked or reserved seats
+	hasBookings, err := h.tripSeatRepo.HasBookedSeats(tripID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check existing bookings for trip", "details": err.Error()})
+		return
+	}
+	if hasBookings {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Cannot unpublish trip",
+			"code":    "TRIP_HAS_BOOKINGS",
+			"message": "This trip cannot be removed from booking because seats have already been booked or reserved. Please manage existing bookings before unpublishing.",
+		})
+		return
+	}
+
 	// Unpublish the trip
 	if err := h.tripRepo.UnpublishTrip(tripID, busOwner.ID); err != nil {
 		if err.Error() == "trip not found or unauthorized" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Trip not found or access denied"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove trip from booking"})
+		if err.Error() == "trip has active bookings and cannot be unpublished" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "Cannot unpublish trip",
+				"code":    "TRIP_HAS_BOOKINGS",
+				"message": "This trip cannot be removed from booking because seats have already been booked or reserved. Please manage existing bookings before unpublishing.",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove trip from booking", "details": err.Error()})
 		return
 	}
 
@@ -1255,21 +1278,57 @@ func (h *ScheduledTripHandler) BulkUnpublishTrips(c *gin.Context) {
 	log.Printf("Bulk unpublish: Bus owner found - ID: %s, User ID: %s",
 		busOwner.ID, userCtx.UserID.String())
 
-	// Bulk unpublish trips
-	unpublishedCount, err := h.tripRepo.BulkUnpublishTrips(req.TripIDs, busOwner.ID)
+	// Find trips that have booked or reserved seats
+	bookedTripIDs, err := h.tripSeatRepo.GetTripIDsWithBookings(req.TripIDs)
+	if err != nil {
+		log.Printf("Bulk unpublish: Failed to check bookings: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check existing bookings for trips", "details": err.Error()})
+		return
+	}
+
+	// If all requested trips have bookings, reject with a clear error
+	if len(bookedTripIDs) > 0 && len(bookedTripIDs) == len(req.TripIDs) {
+		log.Printf("Bulk unpublish: All %d requested trips have bookings - aborting", len(req.TripIDs))
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":            "Cannot unpublish trips",
+			"code":             "ALL_TRIPS_HAVE_BOOKINGS",
+			"message":          "None of the selected trips could be removed from booking because all of them have existing seat bookings.",
+			"skipped_count":    len(bookedTripIDs),
+			"skipped_trip_ids": bookedTripIDs,
+		})
+		return
+	}
+
+	// Filter out booked trips to get eligible trips (Option A: Skip & Report)
+	bookedSet := make(map[string]bool)
+	for _, id := range bookedTripIDs {
+		bookedSet[id] = true
+	}
+
+	var eligibleTripIDs []string
+	for _, id := range req.TripIDs {
+		if !bookedSet[id] {
+			eligibleTripIDs = append(eligibleTripIDs, id)
+		}
+	}
+
+	// Bulk unpublish eligible trips
+	unpublishedCount, err := h.tripRepo.BulkUnpublishTrips(eligibleTripIDs, busOwner.ID)
 	if err != nil {
 		log.Printf("Bulk unpublish: Failed to unpublish trips for bus owner %s: %v (Trip IDs: %v)",
-			busOwner.ID, err, req.TripIDs)
+			busOwner.ID, err, eligibleTripIDs)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to unpublish trips", "details": err.Error()})
 		return
 	}
 
-	log.Printf("Bulk unpublish: Success - Unpublished %d/%d trips from booking",
-		unpublishedCount, len(req.TripIDs))
+	log.Printf("Bulk unpublish: Success - Unpublished %d/%d trips (Skipped %d booked trips)",
+		unpublishedCount, len(req.TripIDs), len(bookedTripIDs))
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":           "Trips removed from booking successfully",
 		"unpublished_count": unpublishedCount,
+		"skipped_count":     len(bookedTripIDs),
+		"skipped_trip_ids":  bookedTripIDs,
 		"requested_count":   len(req.TripIDs),
 	})
 }

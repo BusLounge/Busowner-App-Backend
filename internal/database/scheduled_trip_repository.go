@@ -723,6 +723,7 @@ func (r *ScheduledTripRepository) UnpublishTrip(tripID string, busOwnerID string
 	log.Printf("UnpublishTrip: Setting is_bookable=false for trip %s, bus owner %s", tripID, busOwnerID)
 
 	// Update query supports both ownership paths (trip_schedule or bus_owner_route)
+	// and ensures trip has no booked/reserved seats (defense-in-depth)
 	query := `
 		UPDATE scheduled_trips st
 		SET is_bookable = false, updated_at = NOW()
@@ -733,6 +734,11 @@ func (r *ScheduledTripRepository) UnpublishTrip(tripID string, busOwnerID string
 			LEFT JOIN bus_owner_routes bor ON st2.bus_owner_route_id = bor.id
 			WHERE st2.id = $1
 			  AND (ts.bus_owner_id = $2 OR bor.bus_owner_id = $2)
+			  AND NOT EXISTS (
+				  SELECT 1 FROM trip_seats ts_chk 
+				  WHERE ts_chk.scheduled_trip_id = st2.id 
+				    AND ts_chk.status IN ('booked', 'reserved')
+			  )
 		) AS authorized
 		WHERE st.id = authorized.id
 	`
@@ -749,6 +755,16 @@ func (r *ScheduledTripRepository) UnpublishTrip(tripID string, busOwnerID string
 	}
 
 	if rowsAffected == 0 {
+		var exists bool
+		_ = r.db.Get(&exists, `SELECT EXISTS(
+			SELECT 1 FROM scheduled_trips st2
+			LEFT JOIN trip_schedules ts ON st2.trip_schedule_id = ts.id
+			LEFT JOIN bus_owner_routes bor ON st2.bus_owner_route_id = bor.id
+			WHERE st2.id = $1 AND (ts.bus_owner_id = $2 OR bor.bus_owner_id = $2)
+		)`, tripID, busOwnerID)
+		if exists {
+			return fmt.Errorf("trip has active bookings and cannot be unpublished")
+		}
 		return fmt.Errorf("trip not found or unauthorized")
 	}
 
@@ -836,6 +852,7 @@ func (r *ScheduledTripRepository) BulkUnpublishTrips(tripIDs []string, busOwnerI
 	log.Printf("BulkUnpublishTrips: Trip IDs: %v", tripIDs)
 
 	// Convert string slice to PostgreSQL text array format
+	// and ensure trips with booked/reserved seats are excluded (defense-in-depth)
 	query := `
 		UPDATE scheduled_trips st
 		SET is_bookable = false, updated_at = NOW()
@@ -846,6 +863,11 @@ func (r *ScheduledTripRepository) BulkUnpublishTrips(tripIDs []string, busOwnerI
 			LEFT JOIN bus_owner_routes bor ON st2.bus_owner_route_id = bor.id
 			WHERE st2.id = ANY($1::text[])
 			  AND (ts.bus_owner_id = $2 OR bor.bus_owner_id = $2)
+			  AND NOT EXISTS (
+				  SELECT 1 FROM trip_seats ts_chk 
+				  WHERE ts_chk.scheduled_trip_id = st2.id 
+				    AND ts_chk.status IN ('booked', 'reserved')
+			  )
 		) AS authorized
 		WHERE st.id = authorized.id
 	`
