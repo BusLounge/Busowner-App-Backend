@@ -403,6 +403,7 @@ func main() {
 		ownerRepository,
 		busOwnerRouteRepo,
 	)
+	tripSeatHandler.SetOneSignalService(oneSignalService)
 	logger.Info("✓ Trip seat handler initialized")
 
 	// Initialize App Booking system (passenger app bookings)
@@ -1173,6 +1174,7 @@ func main() {
 			scheduledTrips.POST("/:id/seats/block", middleware.RequireVerifiedBusOwner(ownerRepository), tripSeatHandler.BlockSeats)
 			scheduledTrips.POST("/:id/seats/unblock", middleware.RequireVerifiedBusOwner(ownerRepository), tripSeatHandler.UnblockSeats)
 			scheduledTrips.PUT("/:id/seats/price", middleware.RequireVerifiedBusOwner(ownerRepository), tripSeatHandler.UpdateSeatPrices)
+			scheduledTrips.POST("/:id/change-seat", middleware.RequireVerifiedBusOwner(ownerRepository), tripSeatHandler.ChangeTripSeat)
 
 			// ============================================================================
 			// MANUAL BOOKINGS ROUTES (Phone/Agent/Walk-in bookings)
@@ -1202,6 +1204,8 @@ func main() {
 			manualBookings.PUT("/:id/payment", middleware.RequireVerifiedBusOwner(ownerRepository), tripSeatHandler.UpdateManualBookingPayment)
 			logger.Info("  ✅ PUT /api/v1/manual-bookings/:id/status (requires verification)")
 			manualBookings.PUT("/:id/status", middleware.RequireVerifiedBusOwner(ownerRepository), tripSeatHandler.UpdateManualBookingStatus)
+			logger.Info("  ✅ PUT /api/v1/manual-bookings/:id/change-seat (requires verification)")
+			manualBookings.PUT("/:id/change-seat", middleware.RequireVerifiedBusOwner(ownerRepository), tripSeatHandler.ChangeManualBookingSeat)
 			logger.Info("  ✅ DELETE /api/v1/manual-bookings/:id (requires verification)")
 			manualBookings.DELETE("/:id", middleware.RequireVerifiedBusOwner(ownerRepository), tripSeatHandler.CancelManualBooking)
 		}

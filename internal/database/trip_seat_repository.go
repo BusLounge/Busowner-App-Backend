@@ -116,9 +116,15 @@ func (r *TripSeatRepository) GetByScheduledTripIDWithBookingInfo(scheduledTripID
 			ts.id, ts.scheduled_trip_id, ts.seat_number, ts.seat_type, ts.row_number, ts.position,
 			ts.seat_price, ts.status, ts.booking_type, ts.bus_booking_seat_id, ts.manual_booking_id,
 			ts.block_reason, ts.blocked_by_user_id, ts.blocked_at, ts.created_at, ts.updated_at,
-			mb.passenger_name, mb.passenger_phone, mb.booking_reference, mb.payment_status
+			COALESCE(mb.passenger_name, bbs.passenger_name) as passenger_name,
+			COALESCE(mb.passenger_phone, bbs.passenger_phone) as passenger_phone,
+			COALESCE(mb.booking_reference, b.booking_reference) as booking_reference,
+			COALESCE(mb.payment_status, b.payment_status::text) as payment_status
 		FROM trip_seats ts
 		LEFT JOIN manual_seat_bookings mb ON ts.manual_booking_id = mb.id
+		LEFT JOIN bus_booking_seats bbs ON ts.bus_booking_seat_id = bbs.id
+		LEFT JOIN bus_bookings bb ON bbs.bus_booking_id = bb.id
+		LEFT JOIN bookings b ON bb.booking_id = b.id
 		WHERE ts.scheduled_trip_id = $1
 		ORDER BY ts.row_number, ts.position
 	`
@@ -437,4 +443,216 @@ func (r *TripSeatRepository) UpdateAvailableSeatPrices(scheduledTripID string, n
 	}
 	rowsAffected, _ := result.RowsAffected()
 	return int(rowsAffected), nil
+}
+
+// ChangeAppBookingSeatResult contains information about a changed app booking seat
+type ChangeAppBookingSeatResult struct {
+	NewSeat         *models.TripSeat
+	OldSeatNumber   string
+	NewSeatNumber   string
+	PassengerName   string
+	PlayerIDs       []string
+	RouteName       string
+	ScheduledTripID string
+}
+
+// ChangeAppBookingSeat performs an atomic transaction to change an app-booked seat
+func (r *TripSeatRepository) ChangeAppBookingSeat(currentTripSeatID string, newTripSeatID string, reason string) (*ChangeAppBookingSeatResult, error) {
+	if currentTripSeatID == newTripSeatID {
+		return nil, fmt.Errorf("current seat and new seat cannot be the same")
+	}
+
+	tx, err := r.db.Beginx()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	now := time.Now()
+
+	// 1. Lock and check current seat
+	var currentSeat models.TripSeat
+	getCurrentSeatQuery := `
+		SELECT id, scheduled_trip_id, seat_number, seat_type, row_number, position,
+		       seat_price, status, booking_type, bus_booking_seat_id, manual_booking_id,
+		       block_reason, blocked_by_user_id, blocked_at, created_at, updated_at
+		FROM trip_seats
+		WHERE id = $1
+		FOR UPDATE
+	`
+	err = tx.Get(&currentSeat, getCurrentSeatQuery, currentTripSeatID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("current seat not found")
+		}
+		return nil, fmt.Errorf("failed to get current seat: %w", err)
+	}
+
+	if currentSeat.Status != models.TripSeatStatusBooked {
+		return nil, fmt.Errorf("seat %s is not booked", currentSeat.SeatNumber)
+	}
+
+	if currentSeat.BookingType == nil || *currentSeat.BookingType != models.TripSeatBookingTypeApp || currentSeat.BusBookingSeatID == nil {
+		return nil, fmt.Errorf("seat %s is not an app booking", currentSeat.SeatNumber)
+	}
+
+	// 2. Lock and check bus_booking_seats
+	var bookingSeat struct {
+		ID             string  `db:"id"`
+		BusBookingID   string  `db:"bus_booking_id"`
+		PassengerName  string  `db:"passenger_name"`
+		PassengerPhone *string `db:"passenger_phone"`
+		Status         string  `db:"status"`
+	}
+	getBookingSeatQuery := `
+		SELECT id, bus_booking_id, passenger_name, passenger_phone, status
+		FROM bus_booking_seats
+		WHERE id = $1
+		FOR UPDATE
+	`
+	err = tx.Get(&bookingSeat, getBookingSeatQuery, *currentSeat.BusBookingSeatID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("passenger booking seat record not found")
+		}
+		return nil, fmt.Errorf("failed to get booking seat: %w", err)
+	}
+
+	if bookingSeat.Status == "cancelled" {
+		return nil, fmt.Errorf("cannot change seat for a cancelled booking")
+	}
+
+	// 3. Lock and check new seat
+	var newSeat models.TripSeat
+	getNewSeatQuery := `
+		SELECT id, scheduled_trip_id, seat_number, seat_type, row_number, position,
+		       seat_price, status, booking_type, bus_booking_seat_id, manual_booking_id,
+		       block_reason, blocked_by_user_id, blocked_at, created_at, updated_at
+		FROM trip_seats
+		WHERE id = $1
+		FOR UPDATE
+	`
+	err = tx.Get(&newSeat, getNewSeatQuery, newTripSeatID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("new seat not found")
+		}
+		return nil, fmt.Errorf("failed to get new seat: %w", err)
+	}
+
+	if newSeat.ScheduledTripID != currentSeat.ScheduledTripID {
+		return nil, fmt.Errorf("new seat does not belong to the same trip")
+	}
+
+	if newSeat.Status != models.TripSeatStatusAvailable {
+		return nil, fmt.Errorf("seat %s is no longer available (status: %s)", newSeat.SeatNumber, newSeat.Status)
+	}
+
+	// 4. Release old seat
+	releaseOldSeatQuery := `
+		UPDATE trip_seats
+		SET status = 'available',
+		    booking_type = NULL,
+		    bus_booking_seat_id = NULL,
+		    updated_at = $1
+		WHERE id = $2 AND bus_booking_seat_id = $3
+	`
+	res, err := tx.Exec(releaseOldSeatQuery, now, currentTripSeatID, bookingSeat.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to release current seat: %w", err)
+	}
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		return nil, fmt.Errorf("failed to release current seat: seat was not assigned to this booking")
+	}
+
+	// 5. Claim new seat
+	claimNewSeatQuery := `
+		UPDATE trip_seats
+		SET status = 'booked',
+		    booking_type = 'app',
+		    bus_booking_seat_id = $1,
+		    updated_at = $2
+		WHERE id = $3 AND status = 'available'
+	`
+	res, err = tx.Exec(claimNewSeatQuery, bookingSeat.ID, now, newTripSeatID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to claim new seat: %w", err)
+	}
+	rowsAffected, _ = res.RowsAffected()
+	if rowsAffected == 0 {
+		return nil, fmt.Errorf("new seat %s is no longer available", newSeat.SeatNumber)
+	}
+
+	// 6. Update bus_booking_seats record
+	updateBookingSeatQuery := `
+		UPDATE bus_booking_seats
+		SET trip_seat_id = $1,
+		    updated_at = $2
+		WHERE id = $3
+	`
+	_, err = tx.Exec(updateBookingSeatQuery, newSeat.ID, now, bookingSeat.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update bus booking seat: %w", err)
+	}
+
+	// 7. Append audit log in bus_bookings.special_requests
+	auditNote := fmt.Sprintf("[Seat Change %s] Moved from Seat %s to Seat %s", now.Format("2006-01-02 15:04"), currentSeat.SeatNumber, newSeat.SeatNumber)
+	if reason != "" {
+		auditNote += fmt.Sprintf(". Reason: %s", reason)
+	}
+	updateBookingAuditQuery := `
+		UPDATE bus_bookings
+		SET special_requests = CASE 
+		    WHEN special_requests IS NULL OR special_requests = '' THEN $1
+		    ELSE special_requests || E'\n' || $1
+		END,
+		updated_at = $2
+		WHERE id = $3
+	`
+	_, _ = tx.Exec(updateBookingAuditQuery, auditNote, now, bookingSeat.BusBookingID)
+
+	// 8. Fetch passenger notification target (player ID)
+	fetchPlayerIDsQuery := `
+		SELECT DISTINCT COALESCE(NULLIF(us.onesignal_player_id, ''), NULLIF(us.fcm_token, '')) as player_id
+		FROM user_sessions us
+		JOIN bookings b ON b.user_id::text = us.user_id::text
+		JOIN bus_bookings bb ON bb.booking_id = b.id
+		WHERE bb.id = $1
+		  AND ((us.onesignal_player_id IS NOT NULL AND us.onesignal_player_id != '') OR (us.fcm_token IS NOT NULL AND us.fcm_token != ''))
+		  AND us.is_active = true
+	`
+	var playerIDs []string
+	_ = tx.Select(&playerIDs, fetchPlayerIDsQuery, bookingSeat.BusBookingID)
+
+	// 9. Fetch route name for notification
+	var routeName string
+	fetchRouteQuery := `
+		SELECT COALESCE(bor.custom_route_name, mr.route_name, 'your trip') as route_name
+		FROM scheduled_trips st
+		LEFT JOIN bus_owner_routes bor ON st.bus_owner_route_id = bor.id
+		LEFT JOIN master_routes mr ON bor.master_route_id = mr.id
+		WHERE st.id = $1
+	`
+	_ = tx.Get(&routeName, fetchRouteQuery, currentSeat.ScheduledTripID)
+
+	// 10. Commit transaction
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	newSeat.Status = models.TripSeatStatusBooked
+	bookingTypeApp := models.TripSeatBookingTypeApp
+	newSeat.BookingType = &bookingTypeApp
+	newSeat.BusBookingSeatID = &bookingSeat.ID
+
+	return &ChangeAppBookingSeatResult{
+		NewSeat:         &newSeat,
+		OldSeatNumber:   currentSeat.SeatNumber,
+		NewSeatNumber:   newSeat.SeatNumber,
+		PassengerName:   bookingSeat.PassengerName,
+		PlayerIDs:       playerIDs,
+		RouteName:       routeName,
+		ScheduledTripID: currentSeat.ScheduledTripID,
+	}, nil
 }

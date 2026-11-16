@@ -119,6 +119,12 @@ type CancelManualBookingRequest struct {
 	Reason string `json:"reason"`
 }
 
+// ChangeManualBookingSeatRequest is the request to change a booked seat to another seat
+type ChangeManualBookingSeatRequest struct {
+	CurrentSeatID string `json:"current_seat_id" binding:"required,uuid"`
+	NewSeatID     string `json:"new_seat_id" binding:"required,uuid"`
+}
+
 // GenerateBookingReference generates a unique booking reference
 // Format: PH-20251206-001, AG-20251206-001, WI-20251206-001
 func GenerateBookingReference(bookingType ManualBookingType, sequenceNum int) string {

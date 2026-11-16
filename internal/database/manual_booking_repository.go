@@ -410,6 +410,185 @@ func (r *ManualBookingRepository) Cancel(id, reason string, tripSeatRepo *TripSe
 	return tx.Commit()
 }
 
+// ChangeSeat moves a booking from currentTripSeatID to newTripSeatID
+func (r *ManualBookingRepository) ChangeSeat(bookingID string, currentTripSeatID string, newTripSeatID string, tripSeatRepo *TripSeatRepository) (*models.ManualBookingWithSeats, error) {
+	if currentTripSeatID == newTripSeatID {
+		return nil, fmt.Errorf("current seat and new seat cannot be the same")
+	}
+
+	tx, err := r.db.Beginx()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	now := time.Now()
+
+	// 1. Lock and check booking
+	var booking models.ManualSeatBooking
+	getBookingQuery := `
+		SELECT id, booking_reference, scheduled_trip_id, created_by_user_id, booking_type,
+		       passenger_name, passenger_phone, passenger_nic, passenger_notes,
+		       boarding_stop_id, alighting_stop_id, departure_datetime,
+		       number_of_seats, total_fare, payment_status, amount_paid,
+		       payment_method, payment_notes, status, confirmed_at, checked_in_at,
+		       boarded_at, completed_at, cancelled_at, cancellation_reason,
+		       created_at, updated_at
+		FROM manual_seat_bookings
+		WHERE id = $1
+		FOR UPDATE
+	`
+	err = tx.Get(&booking, getBookingQuery, bookingID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("booking not found")
+		}
+		return nil, fmt.Errorf("failed to get booking: %w", err)
+	}
+
+	if booking.Status == models.ManualBookingStatusCancelled || booking.Status == models.ManualBookingStatusCompleted {
+		return nil, fmt.Errorf("cannot change seat for a %s booking", booking.Status)
+	}
+
+	// 2. Lock and check current seat in manual_booking_seats
+	var bookingSeat models.ManualBookingSeat
+	getBookingSeatQuery := `
+		SELECT id, manual_booking_id, trip_seat_id, seat_number, seat_price, passenger_name, created_at
+		FROM manual_booking_seats
+		WHERE manual_booking_id = $1 AND trip_seat_id = $2
+		FOR UPDATE
+	`
+	err = tx.Get(&bookingSeat, getBookingSeatQuery, bookingID, currentTripSeatID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("current seat is not assigned to this booking")
+		}
+		return nil, fmt.Errorf("failed to verify current booking seat: %w", err)
+	}
+
+	// 3. Lock and verify current trip_seat
+	var currentSeat models.TripSeat
+	getCurrentSeatQuery := `
+		SELECT id, scheduled_trip_id, seat_number, seat_type, row_number, position,
+		       seat_price, status, booking_type, bus_booking_seat_id, manual_booking_id,
+		       block_reason, blocked_by_user_id, blocked_at, created_at, updated_at
+		FROM trip_seats
+		WHERE id = $1
+		FOR UPDATE
+	`
+	err = tx.Get(&currentSeat, getCurrentSeatQuery, currentTripSeatID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current seat: %w", err)
+	}
+
+	// 4. Lock and verify new trip_seat
+	var newSeat models.TripSeat
+	getNewSeatQuery := `
+		SELECT id, scheduled_trip_id, seat_number, seat_type, row_number, position,
+		       seat_price, status, booking_type, bus_booking_seat_id, manual_booking_id,
+		       block_reason, blocked_by_user_id, blocked_at, created_at, updated_at
+		FROM trip_seats
+		WHERE id = $1
+		FOR UPDATE
+	`
+	err = tx.Get(&newSeat, getNewSeatQuery, newTripSeatID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("new seat not found")
+		}
+		return nil, fmt.Errorf("failed to get new seat: %w", err)
+	}
+
+	if newSeat.ScheduledTripID != booking.ScheduledTripID {
+		return nil, fmt.Errorf("new seat does not belong to the same trip")
+	}
+
+	if newSeat.Status != models.TripSeatStatusAvailable {
+		return nil, fmt.Errorf("seat %s is not available (status: %s)", newSeat.SeatNumber, newSeat.Status)
+	}
+
+	// 5. Release old seat
+	releaseOldSeatQuery := `
+		UPDATE trip_seats
+		SET status = 'available',
+		    booking_type = NULL,
+		    manual_booking_id = NULL,
+		    updated_at = $1
+		WHERE id = $2 AND manual_booking_id = $3
+	`
+	res, err := tx.Exec(releaseOldSeatQuery, now, currentTripSeatID, bookingID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to release current seat: %w", err)
+	}
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		return nil, fmt.Errorf("failed to release current seat: seat was not assigned to this booking")
+	}
+
+	// 6. Claim new seat
+	bookingType := models.TripSeatBookingTypePhone
+	switch booking.BookingType {
+	case models.ManualBookingTypePhone:
+		bookingType = models.TripSeatBookingTypePhone
+	case models.ManualBookingTypeAgent:
+		bookingType = models.TripSeatBookingTypeAgent
+	case models.ManualBookingTypeWalkIn:
+		bookingType = models.TripSeatBookingTypeWalkIn
+	}
+
+	claimNewSeatQuery := `
+		UPDATE trip_seats
+		SET status = 'booked',
+		    booking_type = $1,
+		    manual_booking_id = $2,
+		    updated_at = $3
+		WHERE id = $4 AND status = 'available'
+	`
+	res, err = tx.Exec(claimNewSeatQuery, string(bookingType), bookingID, now, newTripSeatID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to claim new seat: %w", err)
+	}
+	rowsAffected, _ = res.RowsAffected()
+	if rowsAffected == 0 {
+		return nil, fmt.Errorf("new seat %s is no longer available", newSeat.SeatNumber)
+	}
+
+	// 7. Update manual_booking_seats record
+	updateBookingSeatQuery := `
+		UPDATE manual_booking_seats
+		SET trip_seat_id = $1,
+		    seat_number = $2,
+		    seat_price = $3
+		WHERE id = $4
+	`
+	_, err = tx.Exec(updateBookingSeatQuery, newSeat.ID, newSeat.SeatNumber, newSeat.SeatPrice, bookingSeat.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update booking seat record: %w", err)
+	}
+
+	// 8. If price changed, update total_fare in manual_seat_bookings
+	priceDiff := newSeat.SeatPrice - currentSeat.SeatPrice
+	if priceDiff != 0 {
+		updateFareQuery := `
+			UPDATE manual_seat_bookings
+			SET total_fare = total_fare + $1,
+			    updated_at = $2
+			WHERE id = $3
+		`
+		_, err = tx.Exec(updateFareQuery, priceDiff, now, bookingID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to update total fare: %w", err)
+		}
+	}
+
+	// 9. Commit transaction
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return r.GetWithSeats(bookingID)
+}
+
 // GetByCreatorUserID returns all manual bookings created by a user with route/stop names joined
 func (r *ManualBookingRepository) GetByCreatorUserID(userID string, limit, offset int) ([]models.ManualSeatBooking, error) {
 	query := `

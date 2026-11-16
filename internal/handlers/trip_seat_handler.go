@@ -9,6 +9,7 @@ import (
 	"github.com/smarttransit/sms-auth-backend/internal/database"
 	"github.com/smarttransit/sms-auth-backend/internal/middleware"
 	"github.com/smarttransit/sms-auth-backend/internal/models"
+	"github.com/smarttransit/sms-auth-backend/pkg/onesignal"
 )
 
 // TripSeatHandler handles trip seats and manual bookings API endpoints
@@ -18,6 +19,12 @@ type TripSeatHandler struct {
 	tripRepo          *database.ScheduledTripRepository
 	busOwnerRepo      *database.BusOwnerRepository
 	routeRepo         *database.BusOwnerRouteRepository
+	oneSignalService  *onesignal.OneSignalService
+}
+
+// SetOneSignalService injects the OneSignal push notification service
+func (h *TripSeatHandler) SetOneSignalService(service *onesignal.OneSignalService) {
+	h.oneSignalService = service
 }
 
 // NewTripSeatHandler creates a new TripSeatHandler
@@ -329,6 +336,130 @@ func (h *TripSeatHandler) UpdateSeatPrices(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message":       "Seat prices updated successfully",
 		"updated_count": count,
+	})
+}
+
+// ChangeTripSeatRequest is the request to change a seat on a scheduled trip (app or manual booking)
+type ChangeTripSeatRequest struct {
+	CurrentSeatID string `json:"current_seat_id" binding:"required,uuid"`
+	NewSeatID     string `json:"new_seat_id" binding:"required,uuid"`
+	Reason        string `json:"reason"`
+}
+
+// ChangeTripSeat changes any booked seat (passenger app booking or manual booking) for a scheduled trip
+// POST /api/v1/scheduled-trips/:id/change-seat
+func (h *TripSeatHandler) ChangeTripSeat(c *gin.Context) {
+	tripID := c.Param("id")
+	if tripID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Trip ID is required"})
+		return
+	}
+
+	userCtx, exists := middleware.GetUserContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	busOwner, err := h.busOwnerRepo.GetByUserID(userCtx.UserID.String())
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only bus owners can change seats"})
+		return
+	}
+
+	if h.checkBusOwnerVerified(c, busOwner) {
+		return
+	}
+
+	var req ChangeTripSeatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.CurrentSeatID == req.NewSeatID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Current seat and new seat cannot be the same"})
+		return
+	}
+
+	currentSeat, err := h.tripSeatRepo.GetByID(req.CurrentSeatID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Current seat not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get current seat"})
+		return
+	}
+
+	if currentSeat.ScheduledTripID != tripID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Seat does not belong to this trip"})
+		return
+	}
+
+	if currentSeat.Status != models.TripSeatStatusBooked {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Seat " + currentSeat.SeatNumber + " is not booked"})
+		return
+	}
+
+	// Case 1: Passenger App Booking
+	if currentSeat.BookingType != nil && *currentSeat.BookingType == models.TripSeatBookingTypeApp {
+		result, err := h.tripSeatRepo.ChangeAppBookingSeat(req.CurrentSeatID, req.NewSeatID, req.Reason)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Asynchronously notify passenger via OneSignal if available
+		if h.oneSignalService != nil && len(result.PlayerIDs) > 0 {
+			go func(playerIDs []string, routeName, oldSeat, newSeat, reason string) {
+				title := "💺 Seat Updated by Operator"
+				body := fmt.Sprintf("Your seat on %s has been changed from %s to %s.", routeName, oldSeat, newSeat)
+				if reason != "" {
+					body += fmt.Sprintf(" (Reason: %s)", reason)
+				}
+				data := map[string]interface{}{
+					"type":       "seat_changed",
+					"trip_id":    tripID,
+					"old_seat":   oldSeat,
+					"new_seat":   newSeat,
+					"route_name": routeName,
+				}
+				resp, sendErr := h.oneSignalService.SendToPlayers(playerIDs, title, body, data)
+				if sendErr != nil {
+					fmt.Printf("Warning: Failed to send OneSignal push for seat change: %v\n", sendErr)
+				} else {
+					fmt.Printf("Successfully sent seat change push to %d device(s). OneSignal ID: %s\n", len(playerIDs), resp.ID)
+				}
+			}(result.PlayerIDs, result.RouteName, result.OldSeatNumber, result.NewSeatNumber, req.Reason)
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message":         "Passenger seat changed successfully",
+			"old_seat_number": result.OldSeatNumber,
+			"new_seat_number": result.NewSeatNumber,
+			"passenger_name":  result.PassengerName,
+			"booking_type":    "app",
+		})
+		return
+	}
+
+	// Case 2: Manual Booking (Phone / Agent / Walk-in)
+	if currentSeat.ManualBookingID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Seat has no booking record associated"})
+		return
+	}
+
+	result, err := h.manualBookingRepo.ChangeSeat(*currentSeat.ManualBookingID, req.CurrentSeatID, req.NewSeatID, h.tripSeatRepo)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":      "Seat changed successfully",
+		"booking":      result,
+		"booking_type": "manual",
 	})
 }
 
@@ -646,6 +777,50 @@ func (h *TripSeatHandler) UpdateManualBookingStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Status updated successfully"})
+}
+
+// ChangeManualBookingSeat changes a seat in an existing manual booking
+// PUT /api/v1/manual-bookings/:id/change-seat
+func (h *TripSeatHandler) ChangeManualBookingSeat(c *gin.Context) {
+	bookingID := c.Param("id")
+	if bookingID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Booking ID is required"})
+		return
+	}
+
+	userCtx, exists := middleware.GetUserContext(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	busOwner, err := h.busOwnerRepo.GetByUserID(userCtx.UserID.String())
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only bus owners can modify bookings"})
+		return
+	}
+
+	// Check verification status
+	if h.checkBusOwnerVerified(c, busOwner) {
+		return
+	}
+
+	var req models.ChangeManualBookingSeatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.manualBookingRepo.ChangeSeat(bookingID, req.CurrentSeatID, req.NewSeatID, h.tripSeatRepo)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Seat changed successfully",
+		"booking": result,
+	})
 }
 
 // SearchManualBookingsByPhone searches bookings by passenger phone
