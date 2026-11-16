@@ -13896,6 +13896,66 @@ paths:
           $ref: '#/components/responses/AccountNotVerifiedError'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /api/v1/scheduled-trips/{id}/change-seat:
+    post:
+      summary: Change a booked seat for a scheduled trip
+      description: |
+        Reassigns a passenger to a different seat on the same scheduled trip.
+        Supports both online passenger app bookings and manual bookings (phone, agent, walk-in).
+        Performs an atomic swap with row-locking (FOR UPDATE) to prevent double-booking.
+        For passenger app bookings, updates the booking seat reference and sends an automated push notification.
+      operationId: changeTripSeat
+      tags:
+      - Trip Seats
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: ID of the scheduled trip
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeTripSeatRequest'
+      responses:
+        '200':
+          description: Seat changed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Seat changed successfully
+                  booking_type:
+                    type: string
+                    example: app
+                  old_seat_number:
+                    type: string
+                    example: A1W
+                  new_seat_number:
+                    type: string
+                    example: A2
+                  passenger_name:
+                    type: string
+                    example: Ruwanthi
+        '400':
+          description: Invalid request or target seat not available
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AccountNotVerifiedError'
+        '404':
+          description: Seat or trip not found
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /api/v1/scheduled-trips/{id}/route-stops:
     get:
       summary: Get route stops for a scheduled trip
@@ -14257,6 +14317,69 @@ paths:
           description: Invalid status
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/manual-bookings/{id}/change-seat:
+    put:
+      summary: Change a seat for a manual booking
+      description: |
+        Reassigns a seat for an existing manual booking (phone, agent, walk-in).
+        Updates the seat status, manual booking seat record, and adjusts total fare if seat price differs.
+      operationId: changeManualBookingSeat
+      tags:
+      - Manual Bookings
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+        description: ID of the manual booking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - current_seat_id
+              - new_seat_id
+              properties:
+                current_seat_id:
+                  type: string
+                  format: uuid
+                  example: 550e8400-e29b-41d4-a716-446655440000
+                new_seat_id:
+                  type: string
+                  format: uuid
+                  example: 550e8400-e29b-41d4-a716-446655440001
+      responses:
+        '200':
+          description: Seat changed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Seat changed successfully
+                  booking:
+                    $ref: '#/components/schemas/ManualSeatBooking'
+                  booking_type:
+                    type: string
+                    example: manual
+        '400':
+          description: Invalid request or target seat not available
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/AccountNotVerifiedError'
+        '404':
+          description: Booking or seat not found
         '500':
           $ref: '#/components/responses/InternalServerError'
   /api/v1/manual-bookings/search:
@@ -18132,6 +18255,26 @@ components:
           format: double
           description: New price for the seats
           example: 400.0
+    ChangeTripSeatRequest:
+      type: object
+      required:
+      - current_seat_id
+      - new_seat_id
+      properties:
+        current_seat_id:
+          type: string
+          format: uuid
+          description: ID of the seat to change from
+          example: 550e8400-e29b-41d4-a716-446655440000
+        new_seat_id:
+          type: string
+          format: uuid
+          description: ID of the new seat to assign
+          example: 550e8400-e29b-41d4-a716-446655440001
+        reason:
+          type: string
+          description: Optional reason for the seat change
+          example: Customer requested seat change
     ManualSeatBooking:
       type: object
       description: Manual booking created by bus owner (phone/agent/walk-in)
