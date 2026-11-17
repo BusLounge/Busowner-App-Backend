@@ -12850,7 +12850,7 @@ paths:
           $ref: '#/components/responses/InternalServerError'
   /api/v1/scheduled-trips/{id}/cancel:
     post:
-      summary: Cancel a scheduled trip (Tier 1: 0 bookings only)
+      summary: 'Cancel a scheduled trip (Tier 1: 0 bookings only)'
       description: 'Cancel an active scheduled trip that has zero booked or reserved seats. If the trip has active passenger bookings, this endpoint rejects the request with code USE_EMERGENCY_CANCEL; the owner must use the emergency-cancel endpoint instead.'
       operationId: cancelScheduledTrip
       tags:
