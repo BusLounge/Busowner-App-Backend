@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 )
 
 // OneSignalService handles push notification operations via OneSignal
@@ -80,7 +81,12 @@ func (s *OneSignalService) SendToPlayers(
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Basic "+s.restAPIKey)
+	// Support both legacy OneSignal keys ("Basic <key>") and v2 keys ("Key os_v2_...")
+	authHeader := "Basic " + s.restAPIKey
+	if strings.HasPrefix(s.restAPIKey, "os_v2_") {
+		authHeader = "Key " + s.restAPIKey
+	}
+	req.Header.Set("Authorization", authHeader)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
