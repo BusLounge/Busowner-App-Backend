@@ -504,10 +504,13 @@ func (r *ScheduledTripRepository) EmergencyCancelTrip(tripID string, busOwnerID 
 	}
 	cancelledManualCount, _ := manualRes.RowsAffected()
 
-	// 6. Release/Cancel trip_seats
+	// 6. Release trip_seats for the cancelled trip
 	updateSeatsQuery := `
 		UPDATE trip_seats
-		SET status = 'cancelled',
+		SET status = 'available',
+		    booking_type = NULL,
+		    bus_booking_seat_id = NULL,
+		    manual_booking_id = NULL,
 		    updated_at = NOW()
 		WHERE scheduled_trip_id = $1
 	`
