@@ -410,9 +410,15 @@ func (h *TripSeatHandler) ChangeTripSeat(c *gin.Context) {
 			return
 		}
 
-		// Asynchronously notify passenger via OneSignal if available
-		if h.oneSignalService != nil && len(result.PlayerIDs) > 0 {
-			go func(playerIDs []string, routeName, oldSeat, newSeat, reason string) {
+		// Asynchronously notify passenger via OneSignal if available (by player ID and/or external user ID)
+		hasPlayerIDs := len(result.PlayerIDs) > 0
+		hasUserID := result.PassengerUserID != ""
+		if h.oneSignalService != nil && (hasPlayerIDs || hasUserID) {
+			var userIDs []string
+			if hasUserID {
+				userIDs = append(userIDs, result.PassengerUserID)
+			}
+			go func(playerIDs, userIDs []string, routeName, oldSeat, newSeat, reason string) {
 				title := "💺 Seat Updated by Operator"
 				body := fmt.Sprintf("Your seat on %s has been changed from %s to %s.", routeName, oldSeat, newSeat)
 				if reason != "" {
@@ -425,13 +431,13 @@ func (h *TripSeatHandler) ChangeTripSeat(c *gin.Context) {
 					"new_seat":   newSeat,
 					"route_name": routeName,
 				}
-				resp, sendErr := h.oneSignalService.SendToPlayers(playerIDs, title, body, data)
+				resp, sendErr := h.oneSignalService.SendNotification(playerIDs, userIDs, title, body, data)
 				if sendErr != nil {
 					fmt.Printf("Warning: Failed to send OneSignal push for seat change: %v\n", sendErr)
 				} else {
-					fmt.Printf("Successfully sent seat change push to %d device(s). OneSignal ID: %s\n", len(playerIDs), resp.ID)
+					fmt.Printf("Successfully sent seat change push (OneSignal ID: %s)\n", resp.ID)
 				}
-			}(result.PlayerIDs, result.RouteName, result.OldSeatNumber, result.NewSeatNumber, req.Reason)
+			}(result.PlayerIDs, userIDs, result.RouteName, result.OldSeatNumber, result.NewSeatNumber, req.Reason)
 		}
 
 		c.JSON(http.StatusOK, gin.H{

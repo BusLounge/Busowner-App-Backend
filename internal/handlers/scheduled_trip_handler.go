@@ -766,9 +766,11 @@ func (h *ScheduledTripHandler) EmergencyCancelTrip(c *gin.Context) {
 		return
 	}
 
-	// Dispatch passenger push notifications via OneSignal asynchronously
-	if h.oneSignalService != nil && len(result.PlayerIDs) > 0 {
-		go func(playerIDs []string, depTime time.Time, routeName, category, fullReason string) {
+	// Dispatch passenger push notifications via OneSignal asynchronously (by player ID and/or external user ID)
+	hasPlayerIDs := len(result.PlayerIDs) > 0
+	hasUserIDs := len(result.PassengerUserIDs) > 0
+	if h.oneSignalService != nil && (hasPlayerIDs || hasUserIDs) {
+		go func(playerIDs, userIDs []string, depTime time.Time, routeName, category, fullReason string) {
 			title := "⚠️ Trip Cancelled: Urgent Notice"
 			body := fmt.Sprintf("Your trip on %s (%s) has been cancelled due to emergency: %s. A full refund has been initiated and will be processed by our admin team.",
 				depTime.Format("Jan 02 at 03:04 PM"), routeName, category)
@@ -780,13 +782,13 @@ func (h *ScheduledTripHandler) EmergencyCancelTrip(c *gin.Context) {
 				"departure_datetime": depTime.Format(time.RFC3339),
 				"route_name":         routeName,
 			}
-			resp, sendErr := h.oneSignalService.SendToPlayers(playerIDs, title, body, data)
+			resp, sendErr := h.oneSignalService.SendNotification(playerIDs, userIDs, title, body, data)
 			if sendErr != nil {
 				log.Printf("Failed to send OneSignal emergency cancel push to passengers: %v", sendErr)
 			} else {
-				log.Printf("Successfully sent OneSignal emergency cancel push to %d passengers. OneSignal ID: %s", len(playerIDs), resp.ID)
+				log.Printf("Successfully sent OneSignal emergency cancel push. OneSignal ID: %s", resp.ID)
 			}
-		}(result.PlayerIDs, result.DepartureDatetime, result.RouteName, req.Category, req.Reason)
+		}(result.PlayerIDs, result.PassengerUserIDs, result.DepartureDatetime, result.RouteName, req.Category, req.Reason)
 	}
 
 	c.JSON(http.StatusOK, gin.H{

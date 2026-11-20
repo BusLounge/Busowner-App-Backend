@@ -392,6 +392,7 @@ type EmergencyCancelResult struct {
 	CancelledBookingsCount int       `json:"cancelled_bookings_count"`
 	ManualBookingsCount    int       `json:"manual_bookings_count"`
 	PlayerIDs              []string  `json:"player_ids"`
+	PassengerUserIDs       []string  `json:"passenger_user_ids"`
 	PassengerPhones        []string  `json:"passenger_phones"`
 	DepartureDatetime      time.Time `json:"departure_datetime"`
 	RouteName              string    `json:"route_name"`
@@ -528,6 +529,16 @@ func (r *ScheduledTripRepository) EmergencyCancelTrip(tripID string, busOwnerID 
 	var playerIDs []string
 	_ = tx.Select(&playerIDs, fetchPlayerIDsQuery, tripID)
 
+	// Fetch passenger user IDs (for direct OneSignal external_user_id push delivery)
+	fetchUserIDsQuery := `
+		SELECT DISTINCT b.user_id::text
+		FROM bookings b
+		JOIN bus_bookings bb ON bb.booking_id = b.id
+		WHERE bb.scheduled_trip_id = $1 AND b.user_id IS NOT NULL
+	`
+	var userIDs []string
+	_ = tx.Select(&userIDs, fetchUserIDsQuery, tripID)
+
 	// Fetch passenger phone numbers
 	fetchPhonesQuery := `
 		SELECT DISTINCT b.passenger_phone
@@ -547,6 +558,7 @@ func (r *ScheduledTripRepository) EmergencyCancelTrip(tripID string, busOwnerID 
 		CancelledBookingsCount: int(cancelledBookingsCount),
 		ManualBookingsCount:    int(cancelledManualCount),
 		PlayerIDs:              playerIDs,
+		PassengerUserIDs:       userIDs,
 		PassengerPhones:        phones,
 		DepartureDatetime:      tripInfo.DepartureDatetime,
 		RouteName:              tripInfo.RouteName,

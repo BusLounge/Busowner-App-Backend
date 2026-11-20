@@ -27,14 +27,16 @@ func NewOneSignalService(appID, restAPIKey string) *OneSignalService {
 
 // NotificationPayload represents the notification structure
 type NotificationPayload struct {
-	AppID            string                 `json:"app_id"`
-	IncludePlayerIDs []string               `json:"include_player_ids,omitempty"`
-	Headings         map[string]string      `json:"headings"`
-	Contents         map[string]string      `json:"contents"`
-	Data             map[string]interface{} `json:"data,omitempty"`
-	Priority         int                    `json:"priority,omitempty"`
-	IOSBadgeType     string                 `json:"ios_badgeType,omitempty"`
-	IOSBadgeCount    int                    `json:"ios_badgeCount,omitempty"`
+	AppID                     string                 `json:"app_id"`
+	IncludePlayerIDs          []string               `json:"include_player_ids,omitempty"`
+	IncludeExternalUserIDs    []string               `json:"include_external_user_ids,omitempty"`
+	ChannelForExternalUserIDs string                 `json:"channel_for_external_user_ids,omitempty"`
+	Headings                  map[string]string      `json:"headings"`
+	Contents                  map[string]string      `json:"contents"`
+	Data                      map[string]interface{} `json:"data,omitempty"`
+	Priority                  int                    `json:"priority,omitempty"`
+	IOSBadgeType              string                 `json:"ios_badgeType,omitempty"`
+	IOSBadgeCount             int                    `json:"ios_badgeCount,omitempty"`
 }
 
 // OneSignalResponse represents the response from OneSignal API
@@ -44,15 +46,16 @@ type OneSignalResponse struct {
 	Errors     []string `json:"errors,omitempty"`
 }
 
-// SendToPlayers sends a notification to specific player IDs
-func (s *OneSignalService) SendToPlayers(
+// SendNotification sends a notification to player IDs and/or external user IDs
+func (s *OneSignalService) SendNotification(
 	playerIDs []string,
+	externalUserIDs []string,
 	title string,
 	body string,
 	data map[string]interface{},
 ) (*OneSignalResponse, error) {
-	if len(playerIDs) == 0 {
-		return nil, fmt.Errorf("no player IDs provided")
+	if len(playerIDs) == 0 && len(externalUserIDs) == 0 {
+		return nil, fmt.Errorf("no targets (player IDs or user IDs) provided")
 	}
 
 	payload := NotificationPayload{
@@ -68,6 +71,11 @@ func (s *OneSignalService) SendToPlayers(
 		Priority:      10, // High priority
 		IOSBadgeType:  "Increase",
 		IOSBadgeCount: 1,
+	}
+
+	if len(externalUserIDs) > 0 {
+		payload.IncludeExternalUserIDs = externalUserIDs
+		payload.ChannelForExternalUserIDs = "push"
 	}
 
 	jsonData, err := json.Marshal(payload)
@@ -115,6 +123,26 @@ func (s *OneSignalService) SendToPlayers(
 	}
 
 	return &osResp, nil
+}
+
+// SendToPlayers sends a notification to specific player IDs
+func (s *OneSignalService) SendToPlayers(
+	playerIDs []string,
+	title string,
+	body string,
+	data map[string]interface{},
+) (*OneSignalResponse, error) {
+	return s.SendNotification(playerIDs, nil, title, body, data)
+}
+
+// SendToExternalUsers sends a notification to specific external user IDs (e.g. passenger user UUIDs)
+func (s *OneSignalService) SendToExternalUsers(
+	externalUserIDs []string,
+	title string,
+	body string,
+	data map[string]interface{},
+) (*OneSignalResponse, error) {
+	return s.SendNotification(nil, externalUserIDs, title, body, data)
 }
 
 // SendToSinglePlayer sends a notification to a single player

@@ -452,6 +452,7 @@ type ChangeAppBookingSeatResult struct {
 	NewSeatNumber   string
 	PassengerName   string
 	PlayerIDs       []string
+	PassengerUserID string
 	RouteName       string
 	ScheduledTripID string
 }
@@ -612,7 +613,7 @@ func (r *TripSeatRepository) ChangeAppBookingSeat(currentTripSeatID string, newT
 	`
 	_, _ = tx.Exec(updateBookingAuditQuery, auditNote, now, bookingSeat.BusBookingID)
 
-	// 8. Fetch passenger notification target (player ID)
+	// 8. Fetch passenger notification target (player ID and user ID)
 	fetchPlayerIDsQuery := `
 		SELECT DISTINCT COALESCE(NULLIF(us.onesignal_player_id, ''), NULLIF(us.fcm_token, '')) as player_id
 		FROM user_sessions us
@@ -624,6 +625,16 @@ func (r *TripSeatRepository) ChangeAppBookingSeat(currentTripSeatID string, newT
 	`
 	var playerIDs []string
 	_ = tx.Select(&playerIDs, fetchPlayerIDsQuery, bookingSeat.BusBookingID)
+
+	var passengerUserID string
+	fetchUserIDQuery := `
+		SELECT COALESCE(b.user_id::text, '')
+		FROM bookings b
+		JOIN bus_bookings bb ON bb.booking_id = b.id
+		WHERE bb.id = $1
+		LIMIT 1
+	`
+	_ = tx.Get(&passengerUserID, fetchUserIDQuery, bookingSeat.BusBookingID)
 
 	// 9. Fetch route name for notification
 	var routeName string
@@ -652,6 +663,7 @@ func (r *TripSeatRepository) ChangeAppBookingSeat(currentTripSeatID string, newT
 		NewSeatNumber:   newSeat.SeatNumber,
 		PassengerName:   bookingSeat.PassengerName,
 		PlayerIDs:       playerIDs,
+		PassengerUserID: passengerUserID,
 		RouteName:       routeName,
 		ScheduledTripID: currentSeat.ScheduledTripID,
 	}, nil
